@@ -13,7 +13,7 @@ from . import agents
 
 
 gym.register(
-    id="Template-Franka-Rl-Direct-v0",
+    id="Franka-Train",
     entry_point=f"{__name__}.franka_rl_env:FrankaRlEnv",
     disable_env_checker=True,
     kwargs={

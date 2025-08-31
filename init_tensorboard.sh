@@ -1,0 +1,1 @@
+tensorboard --logdir ./logs/rsl_rl/Franka_Train/2025-08-31_13-06-18 --port 6007
