@@ -10,6 +10,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
+from isaaclab.sensors import CameraCfg
 
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
@@ -64,6 +65,19 @@ class FrankaRlEnvCfg(DirectRLEnvCfg):
     # robot
     robot: ArticulationCfg = FRANKA_PANDA_CFG.replace(prim_path="/World/envs/env_.*/Robot")
     robot.init_state.pos = (0.0, 0.0, 0.0)
+
+    # camera
+    # camera: CameraCfg = CameraCfg(
+    #     prim_path="/World/Camera", 
+    #     width=800, 
+    #     height=600, 
+    #     spawn=sim_utils.PinholeCameraCfg(
+    #         focal_length=24.0, 
+    #         focus_distance=400.0, 
+    #         horizontal_aperture=20.955, 
+    #         clipping_range=(0.1, 20.0)
+    #         ),
+    #     )
     
     # traj json path & obj usd path
     # PATH = PATH_CFG()

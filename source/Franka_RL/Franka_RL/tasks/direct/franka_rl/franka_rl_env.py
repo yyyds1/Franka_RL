@@ -22,6 +22,10 @@ from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
 from isaaclab.utils.math import sample_uniform, quat_error_magnitude
+from isaaclab.markers import VisualizationMarkersCfg, VisualizationMarkers
+from isaaclab.markers.config import FRAME_MARKER_CFG
+
+from isaaclab.sensors import Camera
 
 from .franka_rl_env_cfg import FrankaRlEnvCfg
 
@@ -135,6 +139,16 @@ class FrankaRlEnv(DirectRLEnv):
         # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
+
+        # Create camera
+        # self.camera = Camera(self.cfg.camera)
+        # self.camera.set_world_poses_from_view(eyes=[2.0, 2.0, 2.0], targets=[0.0, 0.0, 0.0])
+
+        # Markers
+        frame_marker_cfg = FRAME_MARKER_CFG.copy()
+        frame_marker_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
+        self.ee_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_current"))
+        self.goal_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_goal"))
 
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
@@ -287,7 +301,8 @@ class FrankaRlEnv(DirectRLEnv):
 
         # check if we need to do rendering within the physics loop
         # note: checked here once to avoid multiple checks within the loop
-        is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors()
+        # is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors()
+        is_rendering = True
 
         for _ in range(self.cfg.decimation):
             self._sim_step_counter += 1
@@ -304,6 +319,10 @@ class FrankaRlEnv(DirectRLEnv):
                 self.sim.render()
             # update buffers at sim dt
             self.scene.update(dt=self.physics_dt)
+
+        # Visualize Markers
+        self.ee_marker.visualize(self.eepose[:, 0:3] + self.scene.env_origins, self.eepose[:, 3:7])
+        self.goal_marker.visualize(self.target_eepose[:, 0:3] + self.scene.env_origins, self.target_eepose[:, 3:7])
 
         # post-step:
         # -- update env counters (used for curriculum generation)
