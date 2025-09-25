@@ -67,6 +67,16 @@ class FrankaRlEnv(DirectRLEnv):
 
         self._init_traj()
 
+        # import omni.replicator.core as rep
+
+        # # create render product
+        # self._render_product = rep.create.render_product(
+        #     self.cfg.viewer.cam_prim_path, self.cfg.viewer.resolution
+        # )
+        # # create rgb annotator -- used to read data from the render product
+        # self._rgb_annotator = rep.AnnotatorRegistry.get_annotator("rgb", device="cpu")
+        # self._rgb_annotator.attach([self._render_product])
+
     def load_traj_data(self):
         print("[INFO] Process Dataset...")
         self.dataset_path = self.cfg.dataset
@@ -191,6 +201,7 @@ class FrankaRlEnv(DirectRLEnv):
             ),
             dim=-1,
         )
+        # observations = {"policy": {"self_obs": obs.squeeze()}}
         observations = {"policy": obs.squeeze()}
         return observations
 
@@ -301,8 +312,8 @@ class FrankaRlEnv(DirectRLEnv):
 
         # check if we need to do rendering within the physics loop
         # note: checked here once to avoid multiple checks within the loop
-        # is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors()
-        is_rendering = True
+        is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors()
+        # is_rendering = True
 
         for _ in range(self.cfg.decimation):
             self._sim_step_counter += 1
