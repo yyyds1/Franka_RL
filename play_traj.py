@@ -56,6 +56,8 @@ from isaaclab_assets import (
     SAWYER_CFG,
 )
 
+from Franka_RL.robots import SHAND_CFG
+
 # isort: on
 
 
@@ -93,9 +95,12 @@ def design_scene() -> tuple[dict, list[list[float]]]:
     # cfg = sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd")
     # cfg.func("/World/Origin1/Table", cfg, translation=(0.55, 0.0, 1.05))
     # -- Robot
-    franka_arm_cfg = FRANKA_PANDA_CFG.replace(prim_path="/World/Origin1/Robot")
-    franka_arm_cfg.init_state.pos = (0.0, 0.0, 0.0)
-    franka_panda = Articulation(cfg=franka_arm_cfg)
+    # franka_arm_cfg = FRANKA_PANDA_CFG.replace(prim_path="/World/Origin1/Robot")
+    # franka_arm_cfg.init_state.pos = (0.0, 0.0, 0.0)
+    # franka_panda = Articulation(cfg=franka_arm_cfg)
+
+    shand_cfg = SHAND_CFG.replace(prim_path="/World/Origin1/Robot")
+    shand = Articulation(cfg=shand_cfg)
 
     # Origin 2 with UR10
     # prim_utils.create_prim("/World/Origin2", "Xform", translation=origins[1])
@@ -153,7 +158,8 @@ def design_scene() -> tuple[dict, list[list[float]]]:
 
     # return the scene information
     scene_entities = {
-        "franka_panda": franka_panda,
+        "shand": shand,
+        # "franka_panda": franka_panda,
         # "ur10": ur10,
         # "kinova_j2n7s300": kinova_j2n7s300,
         # "kinova_j2n6s300": kinova_j2n6s300,
@@ -164,49 +170,52 @@ def design_scene() -> tuple[dict, list[list[float]]]:
 
 
 def load_traj():
-    dataset = './dataset'
+    dataset = './dataset/maniskill'
     delta_eepose = torch.tensor(np.array(zarr.open(os.path.join(dataset, 'data', 'action'), mode='r')), dtype=torch.float32, device=args_cli.device)
     joint_pose = torch.tensor(np.array(zarr.open(os.path.join(dataset, 'data', 'state'), mode='r')), dtype=torch.float32, device=args_cli.device)[:, :7]
     traj_split = torch.tensor(np.array(zarr.open(os.path.join(dataset, 'meta', 'episode_ends'), mode = 'r')), dtype=torch.int, device=args_cli.device)
     return delta_eepose, joint_pose, traj_split
 
-def run_simulator(sim: sim_utils.SimulationContext, entities: dict[str, Articulation], origins: torch.Tensor, delta_eepose: torch.Tensor, joint_pose: torch.Tensor, split: torch.Tensor):
+def run_simulator(sim: sim_utils.SimulationContext, entities: dict[str, Articulation], origins: torch.Tensor):
     """Runs the simulation loop."""
     # Define simulation stepping
     sim_dt = sim.get_physics_dt()
     sim_time = 0.0
     count = 0
     traj_idx = 0
-    robot = entities['franka_panda']
+    robot = entities['shand']
     # root state
     root_state = robot.data.default_root_state.clone()
     root_state[:, :3] += origins[0]
     robot.write_root_pose_to_sim(root_state[:, :7])
     robot.write_root_velocity_to_sim(root_state[:, 7:])
+    robot.reset()
     joint_vel = robot.data.default_joint_vel.clone()
-    eepose = torch.zeros(joint_pose.shape[0], 7, dtype=torch.float32, device=args_cli.device)
+    while(simulation_app.is_running()):
+        pass
+    # eepose = torch.zeros(joint_pose.shape[0], 7, dtype=torch.float32, device=args_cli.device)
 
-    for target_joint_pose in joint_pose:
-        target_pose = torch.zeros(9, dtype=torch.float32, device=args_cli.device)
-        target_pose[:7] = target_joint_pose
-        robot.write_joint_state_to_sim(target_pose, joint_vel)
-        robot.reset()
-        eepose[count] = robot.data.body_state_w[0, robot.body_names.index("panda_hand"), :7]
-        count += 1
-        sim.step()
-        if(count == split[traj_idx]):
-            print(f"[INFO]: Successfully Process {traj_idx} Trajectory.")
-            traj_idx += 1
-            # if(traj_idx == 10):
-            #     break
+    # for target_joint_pose in joint_pose:
+    #     target_pose = torch.zeros(9, dtype=torch.float32, device=args_cli.device)
+    #     target_pose[:7] = target_joint_pose
+    #     robot.write_joint_state_to_sim(target_pose, joint_vel)
+    #     robot.reset()
+    #     eepose[count] = robot.data.body_state_w[0, robot.body_names.index("panda_hand"), :7]
+    #     count += 1
+    #     sim.step()
+    #     if(count == split[traj_idx]):
+    #         print(f"[INFO]: Successfully Process {traj_idx} Trajectory.")
+    #         traj_idx += 1
+    #         # if(traj_idx == 10):
+    #         #     break
 
     # pass
-    z = zarr.create_array(store="./dataset/data/eepose",
-    shape=eepose.shape,
-    chunks=(100, 7), dtype="<f4",
-    compressors=zarr.codecs.BloscCodec(cname="zstd", clevel=3, shuffle=zarr.codecs.BloscShuffle.shuffle),
-    )
-    z[:, :] = eepose.cpu().numpy()
+    # z = zarr.create_array(store="./dataset/data/eepose",
+    # shape=eepose.shape,
+    # chunks=(100, 7), dtype="<f4",
+    # compressors=zarr.codecs.BloscCodec(cname="zstd", clevel=3, shuffle=zarr.codecs.BloscShuffle.shuffle),
+    # )
+    # z[:, :] = eepose.cpu().numpy()
 
     # pass
     # # Simulate physics
@@ -260,14 +269,14 @@ def main():
     sim.set_camera_view([3.5, 0.0, 3.2], [0.0, 0.0, 0.5])
     # design scene
     scene_entities, scene_origins = design_scene()
-    delta_eepose, joint_pose , split = load_traj()
+    # delta_eepose, joint_pose , split = load_traj()
     scene_origins = torch.tensor(scene_origins, device=sim.device)
     # Play the simulator
     sim.reset()
     # Now we are ready!
     print("[INFO]: Setup complete...")
     # Run the simulator
-    run_simulator(sim, scene_entities, scene_origins, delta_eepose, joint_pose , split)
+    run_simulator(sim, scene_entities, scene_origins)
 
 
 if __name__ == "__main__":
