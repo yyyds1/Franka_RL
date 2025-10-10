@@ -10,6 +10,8 @@ class DexHand(ABC):
         self.name = None
         self.body_names = None
         self.dof_names = None
+        self.wrist_name = None
+        self.contact_body_names = None
         self.init_state = None
         self.actuators = None
         self.dof_limit = None

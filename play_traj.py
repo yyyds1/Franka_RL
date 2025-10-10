@@ -40,7 +40,7 @@ import os
 import isaacsim.core.utils.prims as prim_utils
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import Articulation
+from isaaclab.assets import Articulation, ArticulationCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 ##
@@ -56,7 +56,7 @@ from isaaclab_assets import (
     SAWYER_CFG,
 )
 
-from Franka_RL.robots import SHAND_CFG
+from Franka_RL.robots import DexHandFactory
 
 # isort: on
 
@@ -99,8 +99,37 @@ def design_scene() -> tuple[dict, list[list[float]]]:
     # franka_arm_cfg.init_state.pos = (0.0, 0.0, 0.0)
     # franka_panda = Articulation(cfg=franka_arm_cfg)
 
-    shand_cfg = SHAND_CFG.replace(prim_path="/World/Origin1/Robot")
-    shand = Articulation(cfg=shand_cfg)
+    # shand_cfg = SHAND_CFG.replace(prim_path="/World/Origin1/Robot")
+    # shand = Articulation(cfg=shand_cfg)
+
+    dexhand = DexHandFactory.create_hand('shadow')
+    robot_cfg = ArticulationCfg(
+        prim_path="/World/Origin1/Robot",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=dexhand._usd_path,
+            activate_contact_sensors=True,
+            # visible=False,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=True,
+                retain_accelerations=True,
+                max_depenetration_velocity=1000.0,
+            ),
+            articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+                enabled_self_collisions=True,
+                solver_position_iteration_count=8,
+                solver_velocity_iteration_count=0,
+                sleep_threshold=0.005,
+                stabilization_threshold=0.0005,
+            ),
+            # collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+            joint_drive_props=sim_utils.JointDrivePropertiesCfg(drive_type="force"),
+            fixed_tendons_props=sim_utils.FixedTendonPropertiesCfg(limit_stiffness=30.0, damping=0.1),
+        ),
+        init_state=dexhand.init_state,
+        actuators=dexhand.actuators,
+        soft_joint_pos_limit_factor=1.0,
+    )
+    robot = Articulation(robot_cfg)
 
     # Origin 2 with UR10
     # prim_utils.create_prim("/World/Origin2", "Xform", translation=origins[1])
@@ -158,7 +187,7 @@ def design_scene() -> tuple[dict, list[list[float]]]:
 
     # return the scene information
     scene_entities = {
-        "shand": shand,
+        "shand": robot,
         # "franka_panda": franka_panda,
         # "ur10": ur10,
         # "kinova_j2n7s300": kinova_j2n7s300,

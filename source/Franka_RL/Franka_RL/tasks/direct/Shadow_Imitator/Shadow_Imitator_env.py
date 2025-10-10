@@ -18,14 +18,15 @@ import zarr
 from collections.abc import Sequence
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import Articulation
+from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
-from isaaclab.utils.math import sample_uniform, quat_error_magnitude
+from isaaclab.utils.math import sample_uniform, quat_error_magnitude, transform_points
 from isaaclab.markers import VisualizationMarkersCfg, VisualizationMarkers
+from isaaclab.sensors import ContactSensor, ContactSensorCfg
 from isaaclab.assets.articulation import ArticulationCfg
+from isaaclab.assets import RigidObjectCfg
 from isaaclab.markers.config import FRAME_MARKER_CFG
-
 from isaaclab.sensors import Camera
 
 from .Shadow_Imitator_env_cfg import ShandImitatorEnvCfg
@@ -56,8 +57,75 @@ class ShandImitator(DirectRLEnv):
     def __init__(self, cfg: ShandImitatorEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
-        self.dexhand = DexHandFactory.create_hand(self.cfg.robot)
+        self.obs_future_length = self.cfg.future_frame
+        self.action_joint_scale = self.cfg.action_joint_scale
+        self.action_pos_scale = self.cfg.action_pos_scale
+        self.action_rot_scale = self.cfg.action_rot_scale
+        self.action_moving_scale = self.cfg.action_moving_scale
+        self.joint_limits = self.dexhand.dof_limit
+
+    def _init_traj(self):
+
+        self.dataset = DataFactory.create_data(data_type=self.cfg.dataset_type, side=self.cfg.side, device=self.device, dexhand=self.dexhand)
+        self.traj_num = self.dataset.traj_num
+        self.traj_len = self.dataset.traj_len
+        self.traj_len_max = self.dataset.max_traj_length
+
+        if self.cfg.human_resample_on_env_reset:
+            self.target_jt_i = torch.randint(0, self.traj_num, (self.num_envs, )).to(dtype=torch.int, device=self.device)
+        else:
+            self.target_jt_i = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
+        self.target_jt_j = (torch.rand(self.num_envs).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i]).to(torch.int)
+
+        self.target_wrist_pos_seq = self.dataset.wrist_pos[self.target_jt_i]
+        self.target_wrist_vel_seq = self.dataset.wrist_vel[self.target_jt_i]
+        self.target_joint_pos_seq = self.dataset.joints_pos[self.target_jt_i]
+        self.target_body_pos_seq = self.dataset.body_pos[self.target_jt_i]
+        self.target_obj_pos_seq = self.dataset.obj_pose[self.target_jt_i]
+        self.obj_id_seq = self.dataset.obj_id
+        self.obj_pcl = self.dataset.obj_pcl
+
+        # self.target_wrist_pos = self.target_wrist_pos_seq[:, self.target_jt_j]
+        # self.target_wrist_vel = self.target_wrist_vel_seq[:, self.target_jt_j]
+        # self.target_joint_pos = self.target_joint_pos_seq[:, self.target_jt_j]
+        # self.target_body_pos = self.target_body_pos_seq[:, self.target_jt_j]
+        # self.target_obj_pos = self.target_obj_pos_seq[:, self.target_jt_j]
+
+        self.target_jt_dt = 1 / self.cfg.human_freq  # type: ignore
+        self.target_jt_update_steps = self.target_jt_dt / self.dt  # not necessary integer
+        assert self.dt <= self.target_jt_dt
+        self.target_jt_update_steps_int = sample_int_from_float(self.target_jt_update_steps)
+
+    def update_target(self, reset_env_ids):
+        resample_i = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        if reset_env_ids.shape[0] != 0:
+            if self.cfg.human_resample_on_env_reset:
+                resample_i[reset_env_ids] = True
+                self.target_jt_i[reset_env_ids] = torch.randint_like(reset_env_ids, low=0, high=self.traj_num).to(dtype=torch.int, device=self.device)
+                self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i[reset_env_ids]]).to(torch.int)
+                self.target_wrist_pos_seq[reset_env_ids] = self.dataset.wrist_pos[self.target_jt_i[reset_env_ids]]
+                self.target_wrist_vel_seq[reset_env_ids] = self.dataset.wrist_vel[self.target_jt_i[reset_env_ids]]
+                self.target_joint_pos_seq[reset_env_ids] = self.dataset.joints_pos[self.target_jt_i[reset_env_ids]]
+                self.target_body_pos_seq[reset_env_ids] = self.dataset.body_pos[self.target_jt_i[reset_env_ids]]
+                self.target_obj_pos_seq[reset_env_ids] = self.dataset.obj_pose[self.target_jt_i[reset_env_ids]]
+            else:
+                self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i[reset_env_ids]]).to(torch.int)
+
+                # self.target_jt = self.target_jt_seq[self.target_jt_i, self.target_jt_j]
+                # self.target_eepose = self.target_eepose_seq[self.target_jt_i, self.target_jt_j]
+
+        if self.common_step_counter % self.target_jt_update_steps_int == 0:
+            if self.common_step_counter == 0:
+                self.target_jt_j += 1
+            else:
+                self.target_jt_j += self.move_on
+
+
+    def _setup_scene(self):
+        # create robot
+        self.dexhand = DexHandFactory.create_hand(dexhand_type=self.cfg.robot, side=self.cfg.side)
         self.robot_cfg = ArticulationCfg(
+            prim_path=f"/World/envs/env_.*/robot",
             spawn=sim_utils.UsdFileCfg(
                 usd_path=self.dexhand._usd_path,
                 activate_contact_sensors=True,
@@ -82,82 +150,76 @@ class ShandImitator(DirectRLEnv):
             actuators=self.dexhand.actuators,
             soft_joint_pos_limit_factor=1.0,
         )
+        self.robot = Articulation(self.robot_cfg)
 
-        self.action_scale = self.cfg.action_scale
-
-        # human retargeted poses
+        # load dataset
         self.dt = self.cfg.decimation * self.cfg.sim.dt
-
         self.future_frame = 5
         self.move_on = 1
-
         self._init_traj()
 
-    def _init_traj(self):
+        # create object
+        obj_cfg_list = []
+        for usd_path in self.dataset.obj_usd:
+            obj_name = os.path.basename(usd_path).split('.')[0]
+            obj_cfg = RigidObjectCfg(
+                prim_path=f"/World/envs/env_.*/object",
+                spawn=sim_utils.UsdFileCfg(
+                    usd_path=usd_path,
+                    scale=(1.00, 1.00, 1.00),
+                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                        kinematic_enabled=False,
+                        disable_gravity=True,
+                        enable_gyroscopic_forces=True,
+                        solver_position_iteration_count=8,
+                        solver_velocity_iteration_count=0,
+                        sleep_threshold=0.005,
+                        stabilization_threshold=0.0025,
+                        max_depenetration_velocity=1000.0,
+                    ),
+                    mass_props=sim_utils.MassPropertiesCfg(density=1.0),
+                ),
+                init_state=RigidObjectCfg.InitialStateCfg(
+                    pos=(0.0, 0.0, 0.0),
+                    rot=(0.0, 0.0, 0.0, 0.0),
+                ),
+                debug_vis=False,
+            )
+            self.obj_cfg_list.append(obj_cfg)
 
-        self.dataset = DataFactory.create_data(data_type=self.cfg.dataset_type, side=self.cfg.side, device=self.device, dexhand=self.dexhand)
-        self.traj_num = self.dataset.traj_num
-        self.traj_len = self.dataset.traj_len
-        self.traj_len_max = self.dataset.max_traj_length
-        self.target_wrist_pos_seq = self.dataset.wrist_pos
-        self.target_joint_pos_seq = self.dataset.joints_pos
-        self.target_body_pos_seq = self.dataset.body_pos
-        self.target_obj_pos_seq = self.dataset.obj_pose
-        self.obj_id_seq = self.dataset.obj_id
-        
-        if self.cfg.human_resample_on_env_reset:
-            self.target_jt_i = torch.randint(0, self.traj_num, (self.num_envs, )).to(dtype=torch.int, device=self.device)
-        else:
-            self.target_jt_i = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
-        self.target_jt_j = (torch.rand(self.num_envs).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i]).to(torch.int)
+        self.object = RigidObject([obj_cfg_list[idx] for idx in self.obj_id_seq])
 
-        self.target_wrist_pos = self.target_wrist_pos_seq[self.target_jt_i, self.target_jt_j]
-        self.target_joint_pos = self.target_joint_pos_seq[self.target_jt_i, self.target_jt_j]
-        self.target_body_pos = self.target_body_pos_seq[self.target_jt_i, self.target_jt_j]
-        self.target_obj_pos = self.target_obj_pos_seq[self.target_jt_i, self.target_jt_j]
+        # create sensors
+        self.contact_sensor = {}
+        for contact_body in self.dexhand.contact_body_names:
+            sensor_cfg = ContactSensorCfg(
+                prim_path="/World/envs/env_.*/Robot/" + contact_body,
+                history_length=3,
+                update_period=0.005,
+                track_air_time=True,
+                debug_vis=False,
+                filter_prim_paths_expr=["/World/envs/env_.*/object"],
+            )
+            self.contact_sensor[contact_body] = ContactSensor(sensor_cfg)
+            self.scene.sensors[contact_body] = self.contact_sensor[contact_body]
+        # Create camera
+        # self.camera = Camera(self.cfg.camera)
+        # self.camera.set_world_poses_from_view(eyes=[2.0, 2.0, 2.0], targets=[0.0, 0.0, 0.0])
 
-        self.target_jt_dt = 1 / self.cfg.human_freq  # type: ignore
-        self.target_jt_update_steps = self.target_jt_dt / self.dt  # not necessary integer
-        assert self.dt <= self.target_jt_dt
-        self.target_jt_update_steps_int = sample_int_from_float(self.target_jt_update_steps)
-
-    def update_target(self, reset_env_ids):
-        resample_i = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
-        if self.cfg.human_resample_on_env_reset:
-            resample_i[reset_env_ids] = True
-            self.target_jt_i[reset_env_ids] = torch.randint_like(reset_env_ids, low=0, high=self.traj_num).to(dtype=torch.int, device=self.device)
-            self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i[reset_env_ids]]).to(torch.int)
-        else:
-            self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i[reset_env_ids]]).to(torch.int)
-
-            self.target_jt = self.target_jt_seq[self.target_jt_i, self.target_jt_j]
-            self.target_eepose = self.target_eepose_seq[self.target_jt_i, self.target_jt_j]
-
-        if self.common_step_counter % self.target_jt_update_steps_int == 0:
-            if self.common_step_counter == 0:
-                self.target_jt_j += 1
-            else:
-                self.target_jt_j += self.move_on
-
-
-    def _setup_scene(self):
-        self.robot = Articulation(self.robot_cfg)
         # add ground plane
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs  # type: ignore
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing  # type: ignore
         self.terrain = self.cfg.terrain.class_type(self.cfg.terrain)  # type: ignore
         # clone, filter, and replicate
         # self.scene.clone_environments(copy_from_source=False)
-        self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])  # type: ignore
+        self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
+        self.scene.rigid_objects["object"] = self.object
         # add articultion to scene
         self.scene.articulations["robot"] = self.robot
         # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
-        # Create camera
-        # self.camera = Camera(self.cfg.camera)
-        # self.camera.set_world_poses_from_view(eyes=[2.0, 2.0, 2.0], targets=[0.0, 0.0, 0.0])
 
         # Markers
         frame_marker_cfg = FRAME_MARKER_CFG.copy()
@@ -168,46 +230,156 @@ class ShandImitator(DirectRLEnv):
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         # limit the action in joint limitations
+        # self.action[:, :3] -- force applied to root
+        # self.action[:, 3:6] -- torque applied to root
+        # self.action[:, 6:] -- dexhand joint target
         self.last_actions = self.actions
-        # self.actions = (torch.tanh(actions) + 1) / 2 * (self.joint_limits[:, 1] - self.joint_limits[:, 0]) + self.joint_limits[:, 0]
-        self.actions = torch.clamp(torch.tanh(actions * self.action_scale) * torch.pi / 6 + self.dof_pos, min = self.joint_limits[:, 0], max=self.joint_limits[:, 1])
+        self.actions[:, :3] = actions[:, :3] * self.dt * self.action_pos_scale * self.action_moving_scale + self.last_actions[:, :3] * (1 - self.action_moving_scale)
+        self.actions[:, :3] = actions[:, 3:6] * self.dt * self.action_rot_scale * self.action_moving_scale + self.last_actions[:, 3:6] * (1 - self.action_moving_scale)
+        self.actions[:, 6:] = ((torch.tanh(actions[:, 6:]) + 1) / 2 * (self.joint_limits[:, 1] - self.joint_limits[:, 0]) + self.joint_limits[:, 0]) * self.action_moving_scale + self.last_actions[:, 6:] * (1 - self.action_moving_scale)
+        # self.actions[:, 6:] = torch.clamp(torch.tanh(actions[:, 6:] * self.action_scale) * torch.pi / 6 + self.dof_pos, min = self.joint_limits[:, 0], max=self.joint_limits[:, 1])
         # self.actions = torch.tanh(actions * self.action_scale) * self.joint_gears
         pass
 
     def _apply_action(self) -> None:
-        self.robot.set_joint_position_target(self.actions, joint_ids=range(0, 7))
+        self.robot.set_external_force_and_torque(forces=self.actions[:, :3].unsqueeze(1), torques=self.actions[:, 3:6].unsqueeze(1), body_ids=[self.robot.body_names.index(self.dexhand.wrist_name)])
+        self.robot.set_joint_position_target(self.actions[:, 6:], joint_ids=range(0, self.dexhand.n_dofs))
+        # self.robot.set_joint_position_target(self.actions, joint_ids=range(0, 7))
         # self.robot.set_jointset_joint_effort_target(self.actions, joint_ids=range(0, 7))
 
     def _compute_intermediate_values(self):
         self.dof_pos, self.dof_vel = self.robot.data.joint_pos, self.robot.data.joint_vel
         self.dof_pos = self.dof_pos[:, :7]
         self.dof_vel = self.dof_vel[:, :7]
-        self.eepose = self.robot.data.body_state_w[:, self.robot.body_names.index("panda_hand"), :7] - F.pad(
-            self.scene.env_origins, (0, 4)
-        )
-        self.eepose_diff = self.target_eepose - self.eepose
+        # self.eepose = self.robot.data.body_state_w[:, self.robot.body_names.index("panda_hand"), :7] - F.pad(
+        #     self.scene.env_origins, (0, 4)
+        # )
+        # self.eepose_diff = self.target_eepose - self.eepose
+        # self.eepose_error = self.reward_pose(self.eepose, self.target_eepose, tanh_weight=0.0, pos_norm=2)[0]
 
-        self.eepose_error = self.reward_pose(self.eepose, self.target_eepose, tanh_weight=0.0, pos_norm=2)[0]
+        self.wrist_pos = self.robot.data.body_state_w[:, self.robot.body_names.index(self.dexhand.wrist_name), :7] - F.pad(self.scene.env_origins, (0, 4))
+        self.wrist_vel = self.robot.data.body_state_w[:, self.robot.body_names.index(self.dexhand.wrist_name), 7:]
+        self.body_pos = self.robot.data.body_state_w[:, :, :7] - F.pad(self.scene.env_origins, (0, 4))
+        self.body_vel = self.robot.data.body_state_w[:, :, 7:]
+
+        self.obj_pos = self.object.root_state_w[:, :7]
+        self.obj_vel = self.object.root_state_w[:, 7:]
+        self.obj_com_pos = transform_points(self.object.data.body_com_pos_b, self.obj_pos[:, :3], self.obj_pos[:, 3:]).squeeze()
+        self.obj_curr_pcl = transform_points(self.obj_pcl[self.obj_id_seq], self.obj_pos[:, :3], self.obj_pos[:, 3:])
         
 
     def _get_observations(self) -> dict:
-        joint = self.dof_pos.unsqueeze(1)
-        joint_vel = self.dof_vel.unsqueeze(1)
-        eepose = self.eepose.unsqueeze(1)
-        eepose_diff = self.eepose_diff.unsqueeze(1)
-        target_eepose = self.target_eepose_seq[self.target_jt_i.unsqueeze(1), self.target_jt_j.unsqueeze(1) + torch.arange(self.future_frame).to(device=self.device)].reshape(self.num_envs, 1, self.future_frame * 7)
-        obs = torch.cat(
-            (
-                joint,
-                joint_vel, 
-                eepose,
-                eepose_diff, 
-                target_eepose,
-            ),
-            dim=-1,
-        )
-        # observations = {"policy": {"self_obs": obs.squeeze()}}
-        observations = {"policy": obs.squeeze()}
+        # proprioception state
+        proprioception = {}
+        proprioception["joint_pos"] = self.dof_pos # num_dof
+        proprioception["joint_vel"] = self.dof_vel # num_dof
+        proprioception["cos_joint_pos"] = torch.cos(self.dof_pos) # num_dof
+        proprioception["sin_joint_pos"] = torch.sin(self.dof_pos) # num_dof
+        proprioception["wrist_pos"] = torch.cat([torch.zeros_like(self.wrist_pos[:, :3]), self.wrist_pos[:, 3:]], dim=-1).unsqueeze(1) # ignore wrist position 7
+        proprioception["obj_trans"] = self.obj_pos[:, :3] - self.wrist_pos[:, :3] # 3
+        proprioception["obj_vel"] = self.obj_vel # 6
+        tip_force = torch.stack([self.contact_sensor.data.net_forces_w[k] for k in self.dexhand.contact_body_names], axis=1)
+        proprioception["tip_force"] = torch.cat([tip_force, torch.norm(tip_force, dim=-1, keepdim=True)], dim=-1) # add force magnitude 15 + 5
+        proprioception["obj_com"] = self.obj_com_pos # 3
+        proprioception["obj_gravity"] = self.object.data.default_mass * self.sim.cfg.gravity # 3
+
+        # target state
+        next_target_state = {}
+        cur_idx = self.target_jt_j + 1
+        cur_idx = torch.stack([cur_idx + t for t in range(self.obs_future_length)], dim=-1)
+        cur_idx = torch.clamp(cur_idx, torch.zeros_like(self.traj_len), self.traj_len - 1)
+        nE, nT = self.target_wrist_pos_seq.shape[:2]
+        nF = self.obs_future_length
+
+        def indicing(data, idx):
+            assert data.shape[0] == nE and data.shape[1] == nT
+            remaining_shape = data.shape[2:]
+            expanded_idx = idx
+            for _ in remaining_shape:
+                expanded_idx = expanded_idx.unsqueeze(-1)
+            expanded_idx = expanded_idx.expand(-1, -1, *remaining_shape)
+            return torch.gather(data, 1, expanded_idx)
+
+        target_wrist_pos = indicing(self.target_wrist_pos_seq[:, :3], cur_idx)
+        cur_wrist_pos = self.wrist_pos[:, :3]
+        next_target_state["delta_wrist_pos"] = (target_wrist_pos - cur_wrist_pos[:, None]).reshape(nE, -1) # 3
+
+        target_wrist_vel = indicing(self.target_wrist_vel_seq[:, :3], cur_idx)
+        cur_wrist_vel = self.wrist_vel[:, :3]
+        next_target_state["wrist_vel"] = target_wrist_vel.reshape(nE, -1) # 3
+        next_target_state["delta_wrist_vel"] = (target_wrist_vel - cur_wrist_vel[:, None]).reshape(nE, -1) # 3
+
+        target_wrist_rot = indicing(self.target_wrist_pos_seq[:, 3:], cur_idx)
+        cur_wrist_rot = self.wrist_pos[:, 3:]
+
+        next_target_state["wrist_quat"] = aa_to_quat(target_wrist_rot.reshape(nE * nF, -1))[:, [1, 2, 3, 0]]
+        next_target_state["delta_wrist_quat"] = quat_mul(
+            cur_wrist_rot[:, None].repeat(1, nF, 1).reshape(nE * nF, -1),
+            quat_conjugate(next_target_state["wrist_quat"]),
+        ).reshape(nE, -1)
+        next_target_state["wrist_quat"] = next_target_state["wrist_quat"].reshape(nE, -1)
+
+        target_wrist_ang_vel = indicing(self.demo_data["wrist_angular_velocity"], cur_idx)
+        cur_wrist_ang_vel = self.states["base_state"][:, 10:13]
+        next_target_state["wrist_ang_vel"] = target_wrist_ang_vel.reshape(nE, -1)
+        next_target_state["delta_wrist_ang_vel"] = (target_wrist_ang_vel - cur_wrist_ang_vel[:, None]).reshape(nE, -1)
+
+        target_joints_pos = indicing(self.demo_data["mano_joints"], cur_idx).reshape(nE, nF, -1, 3)
+        cur_joint_pos = self.states["joints_state"][:, 1:, :3]  # skip the base joint
+        next_target_state["delta_joints_pos"] = (target_joints_pos - cur_joint_pos[:, None]).reshape(self.num_envs, -1)
+
+        target_joints_vel = indicing(self.demo_data["mano_joints_velocity"], cur_idx).reshape(nE, nF, -1, 3)
+        cur_joint_vel = self.states["joints_state"][:, 1:, 7:10]  # skip the base joint
+        next_target_state["joints_vel"] = target_joints_vel.reshape(self.num_envs, -1)
+        next_target_state["delta_joints_vel"] = (target_joints_vel - cur_joint_vel[:, None]).reshape(self.num_envs, -1)
+
+        target_obj_transf = indicing(self.demo_data["obj_trajectory"], cur_idx)
+        target_obj_transf = target_obj_transf.reshape(nE * nF, 4, 4)
+        next_target_state["delta_manip_obj_pos"] = (
+            target_obj_transf[:, :3, 3].reshape(nE, nF, -1) - self.states["manip_obj_pos"][:, None]
+        ).reshape(nE, -1)
+
+        target_obj_vel = indicing(self.demo_data["obj_velocity"], cur_idx)
+        cur_obj_vel = self.states["manip_obj_vel"]
+        next_target_state["manip_obj_vel"] = target_obj_vel.reshape(nE, -1)
+        next_target_state["delta_manip_obj_vel"] = (target_obj_vel - cur_obj_vel[:, None]).reshape(nE, -1)
+
+        next_target_state["manip_obj_quat"] = rotmat_to_quat(target_obj_transf[:, :3, :3])[:, [1, 2, 3, 0]]
+        next_target_state["delta_manip_obj_quat"] = quat_mul(
+            self.states["manip_obj_quat"][:, None].repeat(1, nF, 1).reshape(nE * nF, -1),
+            quat_conjugate(next_target_state["manip_obj_quat"]),
+        ).reshape(nE, -1)
+        next_target_state["manip_obj_quat"] = next_target_state["manip_obj_quat"].reshape(nE, -1)
+
+        target_obj_ang_vel = indicing(self.demo_data["obj_angular_velocity"], cur_idx)
+        cur_obj_ang_vel = self.states["manip_obj_ang_vel"]
+        next_target_state["manip_obj_ang_vel"] = target_obj_ang_vel.reshape(nE, -1)
+        next_target_state["delta_manip_obj_ang_vel"] = (target_obj_ang_vel - cur_obj_ang_vel[:, None]).reshape(nE, -1)
+
+        next_target_state["obj_to_joints"] = torch.norm(
+            self.states["manip_obj_pos"][:, None] - self.states["joints_state"][:, :, :3], dim=-1
+        ).reshape(self.num_envs, -1)
+
+        next_target_state["gt_tips_distance"] = indicing(self.demo_data["tips_distance"], cur_idx).reshape(nE, -1)
+
+
+        # joint = self.dof_pos.unsqueeze(1)
+        # joint_vel = self.dof_vel.unsqueeze(1)
+        # eepose = self.eepose.unsqueeze(1)
+        # eepose_diff = self.eepose_diff.unsqueeze(1)
+        # target_eepose = self.target_eepose_seq[self.target_jt_i.unsqueeze(1), self.target_jt_j.unsqueeze(1) + torch.arange(self.future_frame).to(device=self.device)].reshape(self.num_envs, 1, self.future_frame * 7)
+        # obs = torch.cat(
+        #     (
+        #         joint,
+        #         joint_vel, 
+        #         eepose,
+        #         eepose_diff, 
+        #         target_eepose,
+        #     ),
+        #     dim=-1,
+        # )
+        # # observations = {"policy": {"self_obs": obs.squeeze()}}
+        # observations = {"policy": obs.squeeze()}
         return observations
 
     def _get_rewards(self) -> torch.Tensor:

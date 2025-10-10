@@ -23,7 +23,10 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     episode_length_s = 2.5
     # decimation: Number of control action updates @ sim DT per policy DT
     decimation = 4
-    action_scale = 0.1
+    action_joint_scale = 0.1
+    action_pos_scale = 500
+    action_rot_scale = 20
+    action_moving_scale = 1.0
     action_space = 7
     observation_space = 63
     state_space = 63
@@ -62,7 +65,7 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=2.0, replicate_physics=False)
 
     # robot
-    robot = 'shadow_rh'
+    robot = 'shadow'
     side = 'right'
         
     # dataset

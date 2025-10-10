@@ -12,7 +12,7 @@ class DexHandFactory:
         cls._registry[dexhand_type] = hand_class
 
     @classmethod
-    def create_hand(cls, dexhand_type: str, side: str, *args, **kwargs) -> DexHand:
+    def create_hand(cls, dexhand_type: str, side: str = 'right', *args, **kwargs) -> DexHand:
         assert side in ["left", "right"], f"Invalid side '{side}', must be 'left' or 'right'."
         """Create a hand instance by type."""
         dexhand_type += "_rh" if side == "right" else "_lh"

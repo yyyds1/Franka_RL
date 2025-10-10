@@ -60,6 +60,14 @@ class Shadow(DexHand, ABC):
             'LFJ1', 
             'THJ1',
         ]
+        self.wrist_name = 'palm'
+        self.contact_body_names = [
+            "thdistal",
+            "ffdistal",
+            "mfdistal",
+            "rfdistal",
+            "lfdistal",
+        ]
         self.init_state = ArticulationCfg.InitialStateCfg(
             pos=(0.0, 0.0, 0.5),
             rot=(-0.707, 0.0, 0.0, 0.707),
@@ -67,7 +75,7 @@ class Shadow(DexHand, ABC):
                 ".*J.*": 0.0,
             },
         )
-        self.actuators={
+        self.actuators = {
             "fingers": ImplicitActuatorCfg(
                 joint_names_expr=[".*J.*"],
                 effort_limit={
@@ -80,7 +88,7 @@ class Shadow(DexHand, ABC):
                     ".*": 0.5,
                 },
             ),
-        },
+        }
         self.dof_limit = [
             [- 0.349, 0.349],
             [0, 0.785],
