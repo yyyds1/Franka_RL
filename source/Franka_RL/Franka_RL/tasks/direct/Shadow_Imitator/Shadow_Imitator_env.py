@@ -16,12 +16,14 @@ import pendulum
 import json
 import zarr
 from collections.abc import Sequence
+from typing import Dict, List, Tuple
+from torch import Tensor
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
-from isaaclab.utils.math import sample_uniform, quat_error_magnitude, transform_points
+from isaaclab.utils.math import sample_uniform, quat_error_magnitude, transform_points, quat_mul, quat_conjugate
 from isaaclab.markers import VisualizationMarkersCfg, VisualizationMarkers
 from isaaclab.sensors import ContactSensor, ContactSensorCfg
 from isaaclab.assets.articulation import ArticulationCfg
@@ -68,7 +70,6 @@ class ShandImitator(DirectRLEnv):
 
         self.dataset = DataFactory.create_data(data_type=self.cfg.dataset_type, side=self.cfg.side, device=self.device, dexhand=self.dexhand)
         self.traj_num = self.dataset.traj_num
-        self.traj_len = self.dataset.traj_len
         self.traj_len_max = self.dataset.max_traj_length
 
         if self.cfg.human_resample_on_env_reset:
@@ -76,13 +77,18 @@ class ShandImitator(DirectRLEnv):
         else:
             self.target_jt_i = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
         self.target_jt_j = (torch.rand(self.num_envs).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i]).to(torch.int)
+        self.running_frame_len = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
 
+        self.traj_len_seq = self.dataset.traj_len[self.target_jt_i]
         self.target_wrist_pos_seq = self.dataset.wrist_pos[self.target_jt_i]
         self.target_wrist_vel_seq = self.dataset.wrist_vel[self.target_jt_i]
         self.target_joint_pos_seq = self.dataset.joints_pos[self.target_jt_i]
         self.target_body_pos_seq = self.dataset.body_pos[self.target_jt_i]
+        self.target_body_vel_seq = self.dataset.body_vel[self.target_jt_i]
         self.target_obj_pos_seq = self.dataset.obj_pose[self.target_jt_i]
+        self.target_obj_vel_seq = self.dataset.obj_vel[self.target_jt_i]
         self.obj_id_seq = self.dataset.obj_id
+        self.target_tip_distance_seq = self.dataset.tip_distance[self.target_jt_i]
         self.obj_pcl = self.dataset.obj_pcl
 
         # self.target_wrist_pos = self.target_wrist_pos_seq[:, self.target_jt_j]
@@ -103,6 +109,7 @@ class ShandImitator(DirectRLEnv):
                 resample_i[reset_env_ids] = True
                 self.target_jt_i[reset_env_ids] = torch.randint_like(reset_env_ids, low=0, high=self.traj_num).to(dtype=torch.int, device=self.device)
                 self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i[reset_env_ids]]).to(torch.int)
+                self.running_frame_len[reset_env_ids] = 0
                 self.target_wrist_pos_seq[reset_env_ids] = self.dataset.wrist_pos[self.target_jt_i[reset_env_ids]]
                 self.target_wrist_vel_seq[reset_env_ids] = self.dataset.wrist_vel[self.target_jt_i[reset_env_ids]]
                 self.target_joint_pos_seq[reset_env_ids] = self.dataset.joints_pos[self.target_jt_i[reset_env_ids]]
@@ -110,15 +117,17 @@ class ShandImitator(DirectRLEnv):
                 self.target_obj_pos_seq[reset_env_ids] = self.dataset.obj_pose[self.target_jt_i[reset_env_ids]]
             else:
                 self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i[reset_env_ids]]).to(torch.int)
-
+                self.running_frame_len[reset_env_ids] = 0
                 # self.target_jt = self.target_jt_seq[self.target_jt_i, self.target_jt_j]
                 # self.target_eepose = self.target_eepose_seq[self.target_jt_i, self.target_jt_j]
 
         if self.common_step_counter % self.target_jt_update_steps_int == 0:
             if self.common_step_counter == 0:
                 self.target_jt_j += 1
+                self.running_frame_len += 1
             else:
                 self.target_jt_j += self.move_on
+                self.running_frame_len += 1
 
 
     def _setup_scene(self):
@@ -235,7 +244,7 @@ class ShandImitator(DirectRLEnv):
         # self.action[:, 6:] -- dexhand joint target
         self.last_actions = self.actions
         self.actions[:, :3] = actions[:, :3] * self.dt * self.action_pos_scale * self.action_moving_scale + self.last_actions[:, :3] * (1 - self.action_moving_scale)
-        self.actions[:, :3] = actions[:, 3:6] * self.dt * self.action_rot_scale * self.action_moving_scale + self.last_actions[:, 3:6] * (1 - self.action_moving_scale)
+        self.actions[:, 3:6] = actions[:, 3:6] * self.dt * self.action_rot_scale * self.action_moving_scale + self.last_actions[:, 3:6] * (1 - self.action_moving_scale)
         self.actions[:, 6:] = ((torch.tanh(actions[:, 6:]) + 1) / 2 * (self.joint_limits[:, 1] - self.joint_limits[:, 0]) + self.joint_limits[:, 0]) * self.action_moving_scale + self.last_actions[:, 6:] * (1 - self.action_moving_scale)
         # self.actions[:, 6:] = torch.clamp(torch.tanh(actions[:, 6:] * self.action_scale) * torch.pi / 6 + self.dof_pos, min = self.joint_limits[:, 0], max=self.joint_limits[:, 1])
         # self.actions = torch.tanh(actions * self.action_scale) * self.joint_gears
@@ -249,13 +258,7 @@ class ShandImitator(DirectRLEnv):
 
     def _compute_intermediate_values(self):
         self.dof_pos, self.dof_vel = self.robot.data.joint_pos, self.robot.data.joint_vel
-        self.dof_pos = self.dof_pos[:, :7]
-        self.dof_vel = self.dof_vel[:, :7]
-        # self.eepose = self.robot.data.body_state_w[:, self.robot.body_names.index("panda_hand"), :7] - F.pad(
-        #     self.scene.env_origins, (0, 4)
-        # )
-        # self.eepose_diff = self.target_eepose - self.eepose
-        # self.eepose_error = self.reward_pose(self.eepose, self.target_eepose, tanh_weight=0.0, pos_norm=2)[0]
+        self.dof_torque = self.robot.data.applied_torque
 
         self.wrist_pos = self.robot.data.body_state_w[:, self.robot.body_names.index(self.dexhand.wrist_name), :7] - F.pad(self.scene.env_origins, (0, 4))
         self.wrist_vel = self.robot.data.body_state_w[:, self.robot.body_names.index(self.dexhand.wrist_name), 7:]
@@ -300,115 +303,154 @@ class ShandImitator(DirectRLEnv):
             expanded_idx = expanded_idx.expand(-1, -1, *remaining_shape)
             return torch.gather(data, 1, expanded_idx)
 
-        target_wrist_pos = indicing(self.target_wrist_pos_seq[:, :3], cur_idx)
+        target_wrist_pos = indicing(self.target_wrist_pos_seq[:, :,:3], cur_idx)
         cur_wrist_pos = self.wrist_pos[:, :3]
         next_target_state["delta_wrist_pos"] = (target_wrist_pos - cur_wrist_pos[:, None]).reshape(nE, -1) # 3
 
-        target_wrist_vel = indicing(self.target_wrist_vel_seq[:, :3], cur_idx)
+        target_wrist_vel = indicing(self.target_wrist_vel_seq[:, :, :3], cur_idx)
         cur_wrist_vel = self.wrist_vel[:, :3]
         next_target_state["wrist_vel"] = target_wrist_vel.reshape(nE, -1) # 3
         next_target_state["delta_wrist_vel"] = (target_wrist_vel - cur_wrist_vel[:, None]).reshape(nE, -1) # 3
 
-        target_wrist_rot = indicing(self.target_wrist_pos_seq[:, 3:], cur_idx)
+        target_wrist_rot = indicing(self.target_wrist_pos_seq[:, :, 3:], cur_idx)
         cur_wrist_rot = self.wrist_pos[:, 3:]
 
-        next_target_state["wrist_quat"] = aa_to_quat(target_wrist_rot.reshape(nE * nF, -1))[:, [1, 2, 3, 0]]
+        next_target_state["wrist_quat"] = target_wrist_rot.reshape(nE * nF, -1)
         next_target_state["delta_wrist_quat"] = quat_mul(
             cur_wrist_rot[:, None].repeat(1, nF, 1).reshape(nE * nF, -1),
             quat_conjugate(next_target_state["wrist_quat"]),
-        ).reshape(nE, -1)
-        next_target_state["wrist_quat"] = next_target_state["wrist_quat"].reshape(nE, -1)
+        ).reshape(nE, -1) # 4
+        next_target_state["wrist_quat"] = next_target_state["wrist_quat"].reshape(nE, -1) # 4
 
-        target_wrist_ang_vel = indicing(self.demo_data["wrist_angular_velocity"], cur_idx)
-        cur_wrist_ang_vel = self.states["base_state"][:, 10:13]
-        next_target_state["wrist_ang_vel"] = target_wrist_ang_vel.reshape(nE, -1)
-        next_target_state["delta_wrist_ang_vel"] = (target_wrist_ang_vel - cur_wrist_ang_vel[:, None]).reshape(nE, -1)
+        target_wrist_ang_vel = indicing(self.target_wrist_vel_seq[:, :, 3:], cur_idx)
+        cur_wrist_ang_vel = self.wrist_vel[:, 3:]
+        next_target_state["wrist_ang_vel"] = target_wrist_ang_vel.reshape(nE, -1) # 3
+        next_target_state["delta_wrist_ang_vel"] = (target_wrist_ang_vel - cur_wrist_ang_vel[:, None]).reshape(nE, -1) # 3
 
-        target_joints_pos = indicing(self.demo_data["mano_joints"], cur_idx).reshape(nE, nF, -1, 3)
+        target_joints_pos = indicing(self.target_body_pos_seq[:, :, 1: ,:3], cur_idx).reshape(nE, nF, -1, 3)
         cur_joint_pos = self.states["joints_state"][:, 1:, :3]  # skip the base joint
-        next_target_state["delta_joints_pos"] = (target_joints_pos - cur_joint_pos[:, None]).reshape(self.num_envs, -1)
+        next_target_state["delta_joints_pos"] = (target_joints_pos - cur_joint_pos[:, None]).reshape(self.num_envs, -1) # 3 * (num_body - 1)
 
-        target_joints_vel = indicing(self.demo_data["mano_joints_velocity"], cur_idx).reshape(nE, nF, -1, 3)
-        cur_joint_vel = self.states["joints_state"][:, 1:, 7:10]  # skip the base joint
-        next_target_state["joints_vel"] = target_joints_vel.reshape(self.num_envs, -1)
-        next_target_state["delta_joints_vel"] = (target_joints_vel - cur_joint_vel[:, None]).reshape(self.num_envs, -1)
+        target_joints_vel = indicing(self.target_body_vel_seq[:, :, 1: ,:3], cur_idx).reshape(nE, nF, -1, 3)
+        cur_joint_vel = self.body_pos[:, 1:, :3]  # skip the base joint
+        next_target_state["joints_vel"] = target_joints_vel.reshape(self.num_envs, -1) # 3 * (num_body - 1)
+        next_target_state["delta_joints_vel"] = (target_joints_vel - cur_joint_vel[:, None]).reshape(self.num_envs, -1) # 3 * (num_bodies - 1)
 
-        target_obj_transf = indicing(self.demo_data["obj_trajectory"], cur_idx)
-        target_obj_transf = target_obj_transf.reshape(nE * nF, 4, 4)
+        target_obj_transf = indicing(self.target_obj_pos_seq[:, :, :3], cur_idx)
         next_target_state["delta_manip_obj_pos"] = (
-            target_obj_transf[:, :3, 3].reshape(nE, nF, -1) - self.states["manip_obj_pos"][:, None]
-        ).reshape(nE, -1)
+            target_obj_transf - self.obj_pos[:, None]
+        ).reshape(nE, -1) # 3
 
-        target_obj_vel = indicing(self.demo_data["obj_velocity"], cur_idx)
-        cur_obj_vel = self.states["manip_obj_vel"]
-        next_target_state["manip_obj_vel"] = target_obj_vel.reshape(nE, -1)
-        next_target_state["delta_manip_obj_vel"] = (target_obj_vel - cur_obj_vel[:, None]).reshape(nE, -1)
+        target_obj_vel = indicing(self.target_obj_vel_seq[:, :, :3], cur_idx)
+        cur_obj_vel = self.obj_vel[:, :3]
+        next_target_state["manip_obj_vel"] = target_obj_vel.reshape(nE, -1) # 3
+        next_target_state["delta_manip_obj_vel"] = (target_obj_vel - cur_obj_vel[:, None]).reshape(nE, -1) # 3
 
-        next_target_state["manip_obj_quat"] = rotmat_to_quat(target_obj_transf[:, :3, :3])[:, [1, 2, 3, 0]]
+        next_target_state["manip_obj_quat"] = indicing(self.target_obj_pos_seq[:, :, 3:], cur_idx)
         next_target_state["delta_manip_obj_quat"] = quat_mul(
-            self.states["manip_obj_quat"][:, None].repeat(1, nF, 1).reshape(nE * nF, -1),
+            self.obj_pos[:, 3:].repeat(1, nF, 1).reshape(nE * nF, -1),
             quat_conjugate(next_target_state["manip_obj_quat"]),
-        ).reshape(nE, -1)
-        next_target_state["manip_obj_quat"] = next_target_state["manip_obj_quat"].reshape(nE, -1)
+        ).reshape(nE, -1) # 4
+        next_target_state["manip_obj_quat"] = next_target_state["manip_obj_quat"].reshape(nE, -1) # 4
 
-        target_obj_ang_vel = indicing(self.demo_data["obj_angular_velocity"], cur_idx)
-        cur_obj_ang_vel = self.states["manip_obj_ang_vel"]
-        next_target_state["manip_obj_ang_vel"] = target_obj_ang_vel.reshape(nE, -1)
-        next_target_state["delta_manip_obj_ang_vel"] = (target_obj_ang_vel - cur_obj_ang_vel[:, None]).reshape(nE, -1)
+        target_obj_ang_vel = indicing(self.target_obj_vel_seq[:, :, 3:], cur_idx)
+        cur_obj_ang_vel = self.obj_vel[:, 3:]
+        next_target_state["manip_obj_ang_vel"] = target_obj_ang_vel.reshape(nE, -1) # 3
+        next_target_state["delta_manip_obj_ang_vel"] = (target_obj_ang_vel - cur_obj_ang_vel[:, None]).reshape(nE, -1) # 3
 
         next_target_state["obj_to_joints"] = torch.norm(
-            self.states["manip_obj_pos"][:, None] - self.states["joints_state"][:, :, :3], dim=-1
-        ).reshape(self.num_envs, -1)
+            self.obj_pos[:, :3] - self.body_pos[:, :, :3], dim=-1
+        ).reshape(self.num_envs, -1) # 3 * num_bodies
 
-        next_target_state["gt_tips_distance"] = indicing(self.demo_data["tips_distance"], cur_idx).reshape(nE, -1)
+        next_target_state["gt_tips_distance"] = indicing(self.target_tip_distance_seq, cur_idx).reshape(nE, -1) # 1
 
+        next_target_state["obj_pcl"] = self.obj_curr_pcl.reshape(nE, -1)
 
-        # joint = self.dof_pos.unsqueeze(1)
-        # joint_vel = self.dof_vel.unsqueeze(1)
-        # eepose = self.eepose.unsqueeze(1)
-        # eepose_diff = self.eepose_diff.unsqueeze(1)
-        # target_eepose = self.target_eepose_seq[self.target_jt_i.unsqueeze(1), self.target_jt_j.unsqueeze(1) + torch.arange(self.future_frame).to(device=self.device)].reshape(self.num_envs, 1, self.future_frame * 7)
-        # obs = torch.cat(
-        #     (
-        #         joint,
-        #         joint_vel, 
-        #         eepose,
-        #         eepose_diff, 
-        #         target_eepose,
-        #     ),
-        #     dim=-1,
-        # )
-        # # observations = {"policy": {"self_obs": obs.squeeze()}}
-        # observations = {"policy": obs.squeeze()}
+        obs = torch.cat(
+            [
+                proprioception[ob]
+                for ob in [
+                    "joint_pos",
+                    "joint_vel",
+                    "cos_joint_pos",
+                    "sin_joint_pos",
+                    "wrist_pos",
+                    "obj_trans",
+                    "obj_vel",
+                    "tip_force",
+                    "obj_com",
+                    "obj_gravity",
+                ]
+            ] + [
+                next_target_state[ob]
+                for ob in [
+                    "delta_wrist_pos",
+                    "wrist_vel",
+                    "delta_wrist_vel",
+                    "wrist_quat",
+                    "delta_wrist_quat",
+                    "wrist_ang_vel",
+                    "delta_wrist_ang_vel",
+                    "delta_joints_pos",
+                    "joints_vel",
+                    "delta_joints_vel",
+                    "delta_manip_obj_pos",
+                    "manip_obj_vel",
+                    "delta_manip_obj_vel",
+                    "manip_obj_quat",
+                    "delta_manip_obj_quat",
+                    "manip_obj_ang_vel",
+                    "delta_manip_obj_ang_vel",
+                    "obj_to_joints",
+                    "gt_tips_distance",
+                    "obj_pcl",
+                ]
+            ],
+            dim=-1,
+        )
+
+        observations = {"policy": obs}
         return observations
 
     def _get_rewards(self) -> torch.Tensor:
-        eepose_reward = torch.exp( 10 * self.reward_pose(self.eepose, self.target_eepose, tanh_weight=0.0, pos_norm=2)[0])
+        states = {}
+        target_states = {}
 
-        joint_reward = torch.exp(- torch.norm(self.target_jt - self.dof_pos, p=2, dim=-1))
+        states["base_state"] = torch.cat([self.wrist_pos, self.wrist_vel], dim=-1)
+        states["joints_state"] = torch.cat([self.body_pos, self.body_vel], dim=-1)
+        states["q"] = self.dof_pos
+        states["dq"] = self.dof_vel
+        states["manip_obj_pos"] = self.obj_pos[:, :3]
+        states["manip_obj_quat"] = self.obj_pos[:, 3:]
+        states["manip_obj_vel"] = self.obj_vel[:, :3]
+        states["manip_obj_ang_vel"] = self.obj_vel[:, 3:]
 
-        died, _ = self._get_dones()
-        alive_reward = torch.where(died, -100, 0)
+        target_states["wrist_pos"] = self.target_wrist_pos_seq[:, :3]
+        target_states["wrist_quat"] = self.target_wrist_pos_seq[:, 3:]
+        target_states["wrist_vel"] = self.target_wrist_vel_seq[:, :3]
+        target_states["wrist_ang_vel"] = self.target_wrist_vel_seq[:, 3:]
+        target_states["joints_pos"] = self.target_body_pos_seq[:, :3]
+        target_states["joints_vel"] = self.target_body_vel_seq[:, :3]
+        target_states["manip_obj_pos"] = self.target_obj_pos_seq[:, :3]
+        target_states["manip_obj_quat"] = self.target_obj_pos_seq[:, 3:]
+        target_states["manip_obj_vel"] = self.target_obj_vel_seq[:, :3]
+        target_states["manip_obj_ang_vel"] = self.target_obj_vel_seq[:, 3:]
+        target_states["power"] = torch.abs(torch.multiply(self.dof_torque, self.dof_vel))
 
-        action_diff = self.actions - self.last_actions
-        smooth_reward =  torch.exp(- torch.norm(action_diff, p=2, dim=-1))
-        
-        # Log Reward
-        self._log_reward("Episode_Reward/eepose_reward", eepose_reward)
-        self._log_reward("Episode_Reward/joint_reward", joint_reward)
-        self._log_reward("Episode_Reward/alive_reward", alive_reward)
-        self._log_reward("Episode_Reward/smooth_reward", smooth_reward)
+        wrist_power = torch.abs(torch.sum(self.actions[:, :3] * self.wrist_vel[:, :3], dim=-1))
+        wrist_power += torch.abs(torch.sum(self.actions[:, 3:6] * self.wrist_vel[:, 3:], dim=-1))
+        target_states["wrist_power"] = wrist_power
 
-        total_reward = (
-            100 * 
-            eepose_reward *
-            joint_reward +
-            alive_reward
-            # smooth_reward
+        return compute_rewards(
+            self.reset_buf,
+            self.target_jt_j,
+            self.running_frame_len,
+            self.actions,
+            states,
+            target_states,
+            self.traj_len_seq,
+            
         )
-        self._log_reward("Episode_Reward/total_reward", total_reward)
-
-        return total_reward
 
     
     def position_command_error(self, des_pos, curr_pos, std=0.1, p=1):
@@ -457,8 +499,7 @@ class ShandImitator(DirectRLEnv):
         self.robot.reset(env_ids)
         super()._reset_idx(env_ids)
 
-        joint_pos = self.robot.data.default_joint_pos[env_ids]
-        joint_pos[:, :7] = self.target_jt[env_ids]
+        joint_pos = self.target_joint_pos_seq[env_ids, self.target_jt_j]
         joint_vel = self.robot.data.default_joint_vel[env_ids]
         
         default_root_state = self.robot.data.default_root_state[env_ids]
@@ -468,6 +509,13 @@ class ShandImitator(DirectRLEnv):
         self.robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         # this can only be turned on if robot joint is corrected
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+
+        obj_pos = self.target_obj_pos_seq[env_ids, self.target_jt_j]
+        obj_pos[:, :3] += self.scene.env_origins[env_ids]
+        obj_vel = self.object.data.default_root_state[env_ids, 7:]
+
+        self.object.write_root_pose_to_sim(obj_pos, env_ids)
+        self.object.write_root_velocity_to_sim(obj_vel, env_ids)
 
         self._compute_intermediate_values()
     
@@ -564,3 +612,190 @@ def compute_rewards(
     rew_pole_vel = rew_scale_pole_vel * torch.sum(torch.abs(pole_vel).unsqueeze(dim=1), dim=-1)
     total_reward = rew_alive + rew_termination + rew_pole_pos + rew_cart_vel + rew_pole_vel
     return total_reward
+
+@torch.jit.script
+def compute_imitation_reward(
+    reset_buf: Tensor,
+    progress_buf: Tensor,
+    running_progress_buf: Tensor,
+    actions: Tensor,
+    states: Dict[str, Tensor],
+    target_states: Dict[str, Tensor],
+    max_length: List[int],
+    scale_factor: float,
+    dexhand_weight_idx: Dict[str, List[int]],
+) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+
+    # type: (Tensor, Tensor, Tensor, Tensor, Dict[str, Tensor], Dict[str, Tensor], Tensor, float, Dict[str, List[int]]) -> Tuple[Tensor, Tensor, Tensor, Tensor, Dict[str, Tensor], Tensor]
+
+    # end effector pose reward
+    current_eef_pos = states["base_state"][:, :3]
+    current_eef_quat = states["base_state"][:, 3:7]
+
+    target_eef_pos = target_states["wrist_pos"]
+    target_eef_quat = target_states["wrist_quat"]
+    diff_eef_pos = target_eef_pos - current_eef_pos
+    diff_eef_pos_dist = torch.norm(diff_eef_pos, dim=-1)
+
+    current_eef_vel = states["base_state"][:, 7:10]
+    current_eef_ang_vel = states["base_state"][:, 10:13]
+    target_eef_vel = target_states["wrist_vel"]
+    target_eef_ang_vel = target_states["wrist_ang_vel"]
+
+    diff_eef_vel = target_eef_vel - current_eef_vel
+    diff_eef_ang_vel = target_eef_ang_vel - current_eef_ang_vel
+
+    joints_pos = states["joints_state"][:, 1:, :3]
+    target_joints_pos = target_states["joints_pos"]
+    diff_joints_pos = target_joints_pos - joints_pos
+    diff_joints_pos_dist = torch.norm(diff_joints_pos, dim=-1)
+
+    # ? assign different weights to different joints
+    # assert diff_joints_pos_dist.shape[1] == 17  # ignore the base joint
+    diff_thumb_tip_pos_dist = diff_joints_pos_dist[:, [k - 1 for k in dexhand_weight_idx["thumb_tip"]]].mean(dim=-1)
+    diff_index_tip_pos_dist = diff_joints_pos_dist[:, [k - 1 for k in dexhand_weight_idx["index_tip"]]].mean(dim=-1)
+    diff_middle_tip_pos_dist = diff_joints_pos_dist[:, [k - 1 for k in dexhand_weight_idx["middle_tip"]]].mean(dim=-1)
+    diff_ring_tip_pos_dist = diff_joints_pos_dist[:, [k - 1 for k in dexhand_weight_idx["ring_tip"]]].mean(dim=-1)
+    diff_pinky_tip_pos_dist = diff_joints_pos_dist[:, [k - 1 for k in dexhand_weight_idx["pinky_tip"]]].mean(dim=-1)
+    diff_level_1_pos_dist = diff_joints_pos_dist[:, [k - 1 for k in dexhand_weight_idx["level_1_joints"]]].mean(dim=-1)
+    diff_level_2_pos_dist = diff_joints_pos_dist[:, [k - 1 for k in dexhand_weight_idx["level_2_joints"]]].mean(dim=-1)
+
+    joints_vel = states["joints_state"][:, 1:, 7:10]
+    target_joints_vel = target_states["joints_vel"]
+    diff_joints_vel = target_joints_vel - joints_vel
+
+    reward_eef_pos = torch.exp(-40 * diff_eef_pos_dist)
+    reward_thumb_tip_pos = torch.exp(-100 * diff_thumb_tip_pos_dist)
+    reward_index_tip_pos = torch.exp(-90 * diff_index_tip_pos_dist)
+    reward_middle_tip_pos = torch.exp(-80 * diff_middle_tip_pos_dist)
+    reward_pinky_tip_pos = torch.exp(-60 * diff_pinky_tip_pos_dist)
+    reward_ring_tip_pos = torch.exp(-60 * diff_ring_tip_pos_dist)
+    reward_level_1_pos = torch.exp(-50 * diff_level_1_pos_dist)
+    reward_level_2_pos = torch.exp(-40 * diff_level_2_pos_dist)
+
+    reward_eef_vel = torch.exp(-1 * diff_eef_vel.abs().mean(dim=-1))
+    reward_eef_ang_vel = torch.exp(-1 * diff_eef_ang_vel.abs().mean(dim=-1))
+    reward_joints_vel = torch.exp(-1 * diff_joints_vel.abs().mean(dim=-1).mean(-1))
+    current_dof_vel = states["dq"]
+
+    diff_eef_rot = quat_mul(target_eef_quat, quat_conjugate(current_eef_quat))
+    diff_eef_rot_angle = quat_to_angle_axis(diff_eef_rot)[0]
+    reward_eef_rot = torch.exp(-1 * (diff_eef_rot_angle).abs())
+
+    # object pose reward
+    current_obj_pos = states["manip_obj_pos"]
+    current_obj_quat = states["manip_obj_quat"]
+
+    target_obj_pos = target_states["manip_obj_pos"]
+    target_obj_quat = target_states["manip_obj_quat"]
+    diff_obj_pos = target_obj_pos - current_obj_pos
+    diff_obj_pos_dist = torch.norm(diff_obj_pos, dim=-1)
+
+    reward_obj_pos = torch.exp(-80 * diff_obj_pos_dist)
+
+    diff_obj_rot = quat_mul(target_obj_quat, quat_conjugate(current_obj_quat))
+    diff_obj_rot_angle = quat_to_angle_axis(diff_obj_rot)[0]
+    reward_obj_rot = torch.exp(-3 * (diff_obj_rot_angle).abs())
+
+    current_obj_vel = states["manip_obj_vel"]
+    target_obj_vel = target_states["manip_obj_vel"]
+    diff_obj_vel = target_obj_vel - current_obj_vel
+    reward_obj_vel = torch.exp(-1 * diff_obj_vel.abs().mean(dim=-1))
+
+    current_obj_ang_vel = states["manip_obj_ang_vel"]
+    target_obj_ang_vel = target_states["manip_obj_ang_vel"]
+    diff_obj_ang_vel = target_obj_ang_vel - current_obj_ang_vel
+    reward_obj_ang_vel = torch.exp(-1 * diff_obj_ang_vel.abs().mean(dim=-1))
+
+    reward_power = torch.exp(-10 * target_states["power"])
+    reward_wrist_power = torch.exp(-2 * target_states["wrist_power"])
+
+    finger_tip_force = target_states["tip_force"]
+    finger_tip_distance = target_states["tips_distance"]
+    contact_range = [0.02, 0.03]
+    finger_tip_weight = torch.clamp(
+        (contact_range[1] - finger_tip_distance) / (contact_range[1] - contact_range[0]), 0, 1
+    )
+    finger_tip_force_masked = finger_tip_force * finger_tip_weight[:, :, None]
+
+    reward_finger_tip_force = torch.exp(-1 * (1 / (torch.norm(finger_tip_force_masked, dim=-1).sum(-1) + 1e-5)))
+
+    error_buf = (
+        (torch.norm(current_eef_vel, dim=-1) > 100)
+        | (torch.norm(current_eef_ang_vel, dim=-1) > 200)
+        | (torch.norm(joints_vel, dim=-1).mean(-1) > 100)
+        | (torch.abs(current_dof_vel).mean(-1) > 200)
+        | (torch.norm(current_obj_vel, dim=-1) > 100)
+        | (torch.norm(current_obj_ang_vel, dim=-1) > 200)
+    )  # sanity check
+
+    failed_execute = (
+        (
+            (diff_obj_pos_dist > 0.02 / 0.343 * scale_factor**3)  # TODO
+            | (diff_thumb_tip_pos_dist > 0.04 / 0.7 * scale_factor)
+            | (diff_index_tip_pos_dist > 0.045 / 0.7 * scale_factor)
+            | (diff_middle_tip_pos_dist > 0.05 / 0.7 * scale_factor)
+            | (diff_pinky_tip_pos_dist > 0.06 / 0.7 * scale_factor)
+            | (diff_ring_tip_pos_dist > 0.06 / 0.7 * scale_factor)
+            | (diff_level_1_pos_dist > 0.07 / 0.7 * scale_factor)
+            | (diff_level_2_pos_dist > 0.08 / 0.7 * scale_factor)
+            | (diff_obj_rot_angle.abs() / np.pi * 180 > 30 / 0.343 * scale_factor**3)  # TODO
+            | torch.any((finger_tip_distance < 0.005) & ~(target_states["tip_contact_state"].any(1)), dim=-1)
+        )
+        & (running_progress_buf >= 8)
+    ) | error_buf
+    reward_execute = (
+        0.1 * reward_eef_pos
+        + 0.6 * reward_eef_rot
+        + 0.9 * reward_thumb_tip_pos
+        + 0.8 * reward_index_tip_pos
+        + 0.75 * reward_middle_tip_pos
+        + 0.6 * reward_pinky_tip_pos
+        + 0.6 * reward_ring_tip_pos
+        + 0.5 * reward_level_1_pos
+        + 0.3 * reward_level_2_pos
+        + 5.0 * reward_obj_pos
+        + 1.0 * reward_obj_rot
+        + 0.1 * reward_eef_vel
+        + 0.05 * reward_eef_ang_vel
+        + 0.1 * reward_joints_vel
+        + 0.1 * reward_obj_vel
+        + 0.1 * reward_obj_ang_vel
+        + 1.0 * reward_finger_tip_force
+        + 0.5 * reward_power
+        + 0.5 * reward_wrist_power
+    )
+
+    succeeded = (
+        progress_buf + 1 + 3 >= max_length
+    ) & ~failed_execute  # reached the end of the trajectory, +3 for max future 3 steps
+    reset_buf = torch.where(
+        succeeded | failed_execute,
+        torch.ones_like(reset_buf),
+        reset_buf,
+    )
+    reward_dict = {
+        "reward_eef_pos": reward_eef_pos,
+        "reward_eef_rot": reward_eef_rot,
+        "reward_eef_vel": reward_eef_vel,
+        "reward_eef_ang_vel": reward_eef_ang_vel,
+        "reward_joints_vel": reward_joints_vel,
+        "reward_obj_pos": reward_obj_pos,
+        "reward_obj_rot": reward_obj_rot,
+        "reward_obj_vel": reward_obj_vel,
+        "reward_obj_ang_vel": reward_obj_ang_vel,
+        "reward_joints_pos": (
+            reward_thumb_tip_pos
+            + reward_index_tip_pos
+            + reward_middle_tip_pos
+            + reward_pinky_tip_pos
+            + reward_ring_tip_pos
+            + reward_level_1_pos
+            + reward_level_2_pos
+        ),
+        "reward_power": reward_power,
+        "reward_wrist_power": reward_wrist_power,
+        "reward_finger_tip_force": reward_finger_tip_force,
+    }
+
+    return reward_execute, reset_buf, succeeded, failed_execute, reward_dict, error_buf
