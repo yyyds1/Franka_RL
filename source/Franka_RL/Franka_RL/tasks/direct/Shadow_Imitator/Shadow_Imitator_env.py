@@ -66,6 +66,10 @@ class ShandImitator(DirectRLEnv):
         self.action_moving_scale = self.cfg.action_moving_scale
         self.joint_limits = self.dexhand.dof_limit
 
+        self.tighten_method = self.cfg.tightenMethod
+        self.tighten_factor = self.cfg.tightenFactor
+        self.tighten_steps = self.cfg.tightenSteps
+
     def _init_traj(self):
 
         self.dataset = DataFactory.create_data(data_type=self.cfg.dataset_type, side=self.cfg.side, device=self.device, dexhand=self.dexhand)
@@ -441,7 +445,32 @@ class ShandImitator(DirectRLEnv):
         wrist_power += torch.abs(torch.sum(self.actions[:, 3:6] * self.wrist_vel[:, 3:], dim=-1))
         target_states["wrist_power"] = wrist_power
 
-        return compute_rewards(
+        last_step = self._sim_step_counter
+        if self.tighten_method == "None":
+            scale_factor = 1.0
+        elif self.tighten_method == "const":
+            scale_factor = self.tighten_factor
+        elif self.tighten_method == "linear_decay":
+            scale_factor = 1 - (1 - self.tighten_factor) / self.tighten_steps * min(last_step, self.tighten_steps)
+        elif self.tighten_method == "exp_decay":
+            scale_factor = (np.e * 2) ** (-1 * last_step / self.tighten_steps) * (
+                1 - self.tighten_factor
+            ) + self.tighten_factor
+        elif self.tighten_method == "cos":
+            scale_factor = (self.tighten_factor) + np.abs(
+                -1 * (1 - self.tighten_factor) * np.cos(last_step / self.tighten_steps * np.pi)
+            ) * (2 ** (-1 * last_step / self.tighten_steps))
+        else:
+            raise NotImplementedError
+
+        (
+            self.reward_buf[:],
+            self.reset_buf[:],
+            self.reset_time_outs[:],
+            self.reset_terminated[:],
+            reward_dict,
+            self.error_buf,
+        ) = compute_rewards(
             self.reset_buf,
             self.target_jt_j,
             self.running_frame_len,
@@ -449,8 +478,12 @@ class ShandImitator(DirectRLEnv):
             states,
             target_states,
             self.traj_len_seq,
-            
+            scale_factor,
+            self.dexhand.weight_idx,
         )
+
+        for rew, val in reward_dict.items():
+            self._log_reward("Episode_Reward/" + rew, val)
 
     
     def position_command_error(self, des_pos, curr_pos, std=0.1, p=1):
@@ -565,9 +598,7 @@ class ShandImitator(DirectRLEnv):
         self.episode_length_buf += 1  # step in current episode (per env)
         self.common_step_counter += 1  # total step (common for all envs)
 
-        self.reset_terminated[:], self.reset_time_outs[:] = self._get_dones()
-        self.reset_buf = self.reset_terminated | self.reset_time_outs
-        self.reward_buf = self._get_rewards()
+        self._get_rewards()
 
         # -- reset envs that terminated/timed-out and log the episode information
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
@@ -591,6 +622,29 @@ class ShandImitator(DirectRLEnv):
 
         # return observations, rewards, resets and extras
         return self.obs_buf, self.reward_buf, self.reset_terminated, self.reset_time_outs, self.extras
+
+@torch.jit.script
+def quat_to_angle_axis(q):
+    # type: (Tensor) -> Tuple[Tensor, Tensor]
+    # computes axis-angle representation from quaternion q
+    # q must be normalized
+    min_theta = 1e-5
+    qx, qy, qz, qw = 1, 2, 3, 0
+
+    sin_theta = torch.sqrt(1 - q[..., qw] * q[..., qw])
+    angle = 2 * torch.acos(q[..., qw])
+    angle = normalize_angle(angle)
+    sin_theta_expand = sin_theta.unsqueeze(-1)
+    axis = q[..., qx:qw] / sin_theta_expand
+
+    mask = torch.abs(sin_theta) > min_theta
+    default_axis = torch.zeros_like(axis)
+    default_axis[..., -1] = 1
+
+    angle = torch.where(mask, angle, torch.zeros_like(angle))
+    mask_expand = mask.unsqueeze(-1)
+    axis = torch.where(mask_expand, axis, default_axis)
+    return angle, axis
 
 @torch.jit.script
 def compute_rewards(

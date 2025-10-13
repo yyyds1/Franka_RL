@@ -33,8 +33,13 @@ class Shadow(DexHand, ABC):
             'mfdistal', 
             'rfdistal', 
             'thmiddle', 
+            'fftip', 
             'lfdistal', 
-            'thdistal',
+            'mftip', 
+            'rftip', 
+            'thdistal', 
+            'lftip', 
+            'thtip',
         ]
         self.dof_names = [
             'FFJ4', 
@@ -113,6 +118,15 @@ class Shadow(DexHand, ABC):
             [0, 1.571],
             [-0.262, 1.571],
         ]
+        self.weight_idx = {
+            "thumb_tip": [27],
+            "index_tip": [21],
+            "middle_tip": [23],
+            "ring_tip": [24],
+            "pinky_tip": [26],
+            "level_1_joints": [1, 3, 4, 5, 6, 7, 8, 9, 10, 12],
+            "level_2_joints": [2, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
+        }
 
     def __str__(self):
         return self.name
@@ -121,7 +135,7 @@ class Shadow(DexHand, ABC):
 class ShadowRH(Shadow):
     def __init__(self):
         super().__init__()
-        self._usd_path = "./assets/Shadow/shadow_hand_right_woarm.usd"
+        self._usd_path = "./assets/Shadow/shadow_hand_right.usd"
         self.side = "rh"
 
     def __str__(self):

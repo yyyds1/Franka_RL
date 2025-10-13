@@ -15,6 +15,7 @@ class DexHand(ABC):
         self.init_state = None
         self.actuators = None
         self.dof_limit = None
+        self.weight_idx = None
 
     
     @property

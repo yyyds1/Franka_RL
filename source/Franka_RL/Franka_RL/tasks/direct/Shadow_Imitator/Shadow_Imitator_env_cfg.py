@@ -42,6 +42,8 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     
     # log train info cfg
     log_train_info = False
+    # log train info cfg
+    log_train_info = False
     info_buffer_size = 500000
     log_dir = './log_info/'
 
@@ -75,6 +77,10 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     gym2lab_order: list = [0, 5, 10, 1, 6, 11, 15, 2, 7, 12, 16, 3, 8, 13, 17, 4, 9, 14, 18]
     heading_weight: float = 0.5
     up_weight: float = 0.1
+
+    tightenMethod = "exp_decay"
+    tightenFactor = 0.7 # 1.0 means no tightening restriction
+    tightenSteps = 128000
 
     energy_cost_scale: float = 0.05
     actions_cost_scale: float = 0.01
