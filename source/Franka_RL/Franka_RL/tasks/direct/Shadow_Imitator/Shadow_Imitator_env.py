@@ -73,8 +73,8 @@ class ShandImitator(DirectRLEnv):
     def _init_traj(self):
 
         self.dataset = DataFactory.create_data(data_type=self.cfg.dataset_type, side=self.cfg.side, device=self.device, dexhand=self.dexhand)
-        self.traj_num = self.dataset.traj_num
-        self.traj_len_max = self.dataset.max_traj_length
+        self.traj_num = self.dataset.data["traj_num"]
+        self.traj_len_max = self.dataset.data["max_traj_length"]
 
         if self.cfg.human_resample_on_env_reset:
             self.target_jt_i = torch.randint(0, self.traj_num, (self.num_envs, )).to(dtype=torch.int, device=self.device)
@@ -83,17 +83,17 @@ class ShandImitator(DirectRLEnv):
         self.target_jt_j = (torch.rand(self.num_envs).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i]).to(torch.int)
         self.running_frame_len = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
 
-        self.traj_len_seq = self.dataset.traj_len[self.target_jt_i]
-        self.target_wrist_pos_seq = self.dataset.wrist_pos[self.target_jt_i]
-        self.target_wrist_vel_seq = self.dataset.wrist_vel[self.target_jt_i]
-        self.target_joint_pos_seq = self.dataset.joints_pos[self.target_jt_i]
-        self.target_body_pos_seq = self.dataset.body_pos[self.target_jt_i]
-        self.target_body_vel_seq = self.dataset.body_vel[self.target_jt_i]
-        self.target_obj_pos_seq = self.dataset.obj_pose[self.target_jt_i]
-        self.target_obj_vel_seq = self.dataset.obj_vel[self.target_jt_i]
-        self.obj_id_seq = self.dataset.obj_id
-        self.target_tip_distance_seq = self.dataset.tip_distance[self.target_jt_i]
-        self.obj_pcl = self.dataset.obj_pcl
+        self.traj_len_seq = self.dataset.data["traj_len"][self.target_jt_i]
+        self.target_wrist_pos_seq = self.dataset.data["wrist_pos"][self.target_jt_i]
+        self.target_wrist_vel_seq = self.dataset.data["wrist_vel"][self.target_jt_i]
+        self.target_joint_pos_seq = self.dataset.data["joints_pos"][self.target_jt_i]
+        self.target_body_pos_seq = self.dataset.data["body_pos"][self.target_jt_i]
+        self.target_body_vel_seq = self.dataset.data["body_vel"][self.target_jt_i]
+        self.target_obj_pos_seq = self.dataset.data["obj_pose"][self.target_jt_i]
+        self.target_obj_vel_seq = self.dataset.data["obj_vel"][self.target_jt_i]
+        self.target_tip_distance_seq = self.dataset.data["tip_distance"][self.target_jt_i]
+        self.obj_id_seq = self.dataset.data["obj_id"]
+        self.obj_pcl = self.dataset.data["obj_pcl"]
 
         # self.target_wrist_pos = self.target_wrist_pos_seq[:, self.target_jt_j]
         # self.target_wrist_vel = self.target_wrist_vel_seq[:, self.target_jt_j]
@@ -114,11 +114,15 @@ class ShandImitator(DirectRLEnv):
                 self.target_jt_i[reset_env_ids] = torch.randint_like(reset_env_ids, low=0, high=self.traj_num).to(dtype=torch.int, device=self.device)
                 self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i[reset_env_ids]]).to(torch.int)
                 self.running_frame_len[reset_env_ids] = 0
-                self.target_wrist_pos_seq[reset_env_ids] = self.dataset.wrist_pos[self.target_jt_i[reset_env_ids]]
-                self.target_wrist_vel_seq[reset_env_ids] = self.dataset.wrist_vel[self.target_jt_i[reset_env_ids]]
-                self.target_joint_pos_seq[reset_env_ids] = self.dataset.joints_pos[self.target_jt_i[reset_env_ids]]
-                self.target_body_pos_seq[reset_env_ids] = self.dataset.body_pos[self.target_jt_i[reset_env_ids]]
-                self.target_obj_pos_seq[reset_env_ids] = self.dataset.obj_pose[self.target_jt_i[reset_env_ids]]
+                self.traj_len_seq = self.dataset.data["traj_len"][self.target_jt_i]
+                self.target_wrist_pos_seq[reset_env_ids] = self.dataset.data["wrist_pos"][self.target_jt_i[reset_env_ids]]
+                self.target_wrist_vel_seq[reset_env_ids] = self.dataset.data["wrist_vel"][self.target_jt_i[reset_env_ids]]
+                self.target_joint_pos_seq[reset_env_ids] = self.dataset.data["joints_pos"][self.target_jt_i[reset_env_ids]]
+                self.target_body_pos_seq[reset_env_ids] = self.dataset.data["body_pos"][self.target_jt_i[reset_env_ids]]
+                self.target_body_vel_seq[reset_env_ids] = self.dataset.data["body_vel"][self.target_jt_i[reset_env_ids]]
+                self.target_obj_pos_seq[reset_env_ids] = self.dataset.data["obj_pose"][self.target_jt_i[reset_env_ids]]
+                self.target_obj_vel_seq[reset_env_ids] = self.dataset.data["obj_vel"][self.target_jt_i[reset_env_ids]]
+                self.target_tip_distance_seq[reset_env_ids] = self.dataset.data["tip_distance"][self.target_jt_i[reset_env_ids]]
             else:
                 self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i[reset_env_ids]]).to(torch.int)
                 self.running_frame_len[reset_env_ids] = 0
@@ -173,7 +177,7 @@ class ShandImitator(DirectRLEnv):
 
         # create object
         obj_cfg_list = []
-        for usd_path in self.dataset.obj_usd:
+        for usd_path in self.dataset.data["obj_usd"]:
             obj_name = os.path.basename(usd_path).split('.')[0]
             obj_cfg = RigidObjectCfg(
                 prim_path=f"/World/envs/env_.*/object",

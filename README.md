@@ -35,11 +35,43 @@ This repository provides RL framework for Dexhand and robotics arm manipulation 
     # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
     python scripts/list_envs.py
     ```
+## Robots
+
+ - This repo now support robot models in following table:
+
+    | Category | Robot Model | Config File Path | Branch |
+    |------|------|------|------|
+    | Dexhand | Shadow Hand | source/Franka_RL/Franka_RL/robots/Shadow.py | origin/master|
+
+    For instance, the dexhand models can be loaded into environments through `DexHandFactory` class:
+    ```python
+    from Franka_RL.robots import DexHandFactory
+    robot = DexHandFactory.create_hand(
+        dexhand_type=your_dexhand_name, 
+        side=your_dexhand_side
+    )
+    ```
+ - To customize your own robot models, please refer to the examples in `source/Franka_RL/Franka_RL/robots`. Follow these steps: 
+    1. (Optional) Create a new Factory class e.g. `RobotFactory` in `source/Franka_RL/Franka_RL/robots/factory.py`.
+    2. (Optional) Create a new Base class e.g `BaseRobot` in `source/Franka_RL/Franka_RL/robots/base.py`.
+    3. Create your robot class in `source/Franka_RL/Franka_RL/robots`. Ensure that the robot class inherits from one of the Base class (e.g. `Dexhand` or `BaseRobot`), and it's properly registered in `__init__.py` 
 
 ## Datasets
 
-## Run a Task
+ <!-- TODO: complete the Dataset Factory-->
 
+## RL Libraries
+ - The repo provides three RL libraries at present: `rsl_rl`, `rl_games` and `skrl`. It's worth noting that this repo has developed novel `OnPolicyPPORunner` and `ActorCritic` class for `rsl_rl` lib. It is possible to define more complex actor and critic networks, not limited to MLP now. For more details, please check `source/Franka_RL/Franka_RL/runners` for the modified classes, and check `source/Franka_RL/Franka_RL/tasks/direct/franka_rl/agents/rsl_rl_ppo_cfg.yaml` for a template config file. 
+ 
+    Run `scripts/rsl_rl/train_new.py` to run the modified `rsl_rl` lib. This repo also reserves the original `rsl_rl` lib by running `scripts/rsl_rl/train.py`.
+
+## Tasks
+
+ - The existed tasks are listed in the following table:
+
+    | Task Name | Task Path | Task Description|
+    |-------|--------|----|
+    | Franka-Train | source/Franka_RL/Franka_RL/tasks/direct/franka_rl | Train a Franka Panda Arm following end effector trajectories|
 ## Troubleshooting
 
 ### Pylance Missing Indexing of Extensions
