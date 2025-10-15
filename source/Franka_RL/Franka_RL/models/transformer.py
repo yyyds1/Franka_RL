@@ -42,6 +42,10 @@ class Transformer(nn.Module):
             input_models[input_key] = instantiate(input_config)
             self.mask_keys[input_key] = input_config.config.get("mask_key", None)
             self.obs_slice[input_config.config.obs_key] = slice(input_config.config.slice_start_idx, input_config.config.slice_end_idx, input_config.config.get("slice_step", 1))
+            if input_config.config.get("checkpoint", None):
+                input_models[input_key].load_state_dict(torch.load(input_config.config["checkpoint"]))
+            if input_config.config.get("froze_param", False):
+                input_models[input_key].requires_grad_(False)
 
         self.input_models = nn.ModuleDict(input_models)
         self.feature_size = self.config.transformer_token_size * len(input_models)

@@ -57,7 +57,7 @@ policy:
             mask_key: null
             obs_key: self_obs
             slice_start_idx: 0
-            slice_end_idx: 63
+            slice_end_idx: 940
             normalize_obs: True
             norm_clamp_value: 5
             layers:
@@ -67,6 +67,15 @@ policy:
               - units: 256
                 activation: relu
                 use_layer_norm: false
+        pointcloud_encoder:
+          _target_: Franka_RL.models.pointtransformer.PointTransformerEnc
+          config:
+            mask_key: null
+            obs_key: self_pcl
+            slice_start_idx: 940
+            slice_end_idx: ${.slice_start_idx + 4096}
+            froze_param: True
+            checkpoint: 'ckpt/pointtransformer.pth'
       output_model:
         _target_: Franka_RL.models.mlp.MLP
         _recursive_: False

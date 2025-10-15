@@ -280,6 +280,8 @@ class ShandImitator(DirectRLEnv):
         
 
     def _get_observations(self) -> dict:
+        # obs_dim = 4 * num_dof + 42 + (4 * num_body + 50) * future_frame
+
         # proprioception state
         proprioception = {}
         proprioception["joint_pos"] = self.dof_pos # num_dof
@@ -342,7 +344,7 @@ class ShandImitator(DirectRLEnv):
         target_joints_vel = indicing(self.target_body_vel_seq[:, :, 1: ,:3], cur_idx).reshape(nE, nF, -1, 3)
         cur_joint_vel = self.body_pos[:, 1:, :3]  # skip the base joint
         next_target_state["joints_vel"] = target_joints_vel.reshape(self.num_envs, -1) # 3 * (num_body - 1)
-        next_target_state["delta_joints_vel"] = (target_joints_vel - cur_joint_vel[:, None]).reshape(self.num_envs, -1) # 3 * (num_bodies - 1)
+        next_target_state["delta_joints_vel"] = (target_joints_vel - cur_joint_vel[:, None]).reshape(self.num_envs, -1) # 3 * (num_body - 1)
 
         target_obj_transf = indicing(self.target_obj_pos_seq[:, :, :3], cur_idx)
         next_target_state["delta_manip_obj_pos"] = (
@@ -368,7 +370,7 @@ class ShandImitator(DirectRLEnv):
 
         next_target_state["obj_to_joints"] = torch.norm(
             self.obj_pos[:, :3] - self.body_pos[:, :, :3], dim=-1
-        ).reshape(self.num_envs, -1) # 3 * num_bodies
+        ).reshape(self.num_envs, -1) # 3 * num_body
 
         next_target_state["gt_tips_distance"] = indicing(self.target_tip_distance_seq, cur_idx).reshape(nE, -1) # 1
 
