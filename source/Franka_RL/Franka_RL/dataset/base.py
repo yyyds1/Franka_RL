@@ -3,23 +3,27 @@ import os
 from scipy.ndimage import gaussian_filter1d
 import numpy as np
 import torch
-from main.dataset.transform import aa_to_rotmat, caculate_align_mat, rotmat_to_aa
+from Franka_RL.dataset.transform import aa_to_rotmat, caculate_align_mat, rotmat_to_aa
 from torch.utils.data import Dataset
 from pytorch3d.ops import sample_points_from_meshes
 from termcolor import cprint
 import pickle
 
 
-class DemoData(Dataset, ABC):
+class DexhandData(Dataset, ABC):
     def __init__(
         self,
         *,
-        data_path: str, 
+        data_dir: str, 
+        skip: int = 2,
         device: str = 'cpu',
         dexhand = None,
     ):
         # traj info
-        self.data_path = data_path
+        self.data_dir = data_dir
+        self.skip = skip
+        self.data_pathes = None
+        
         self.device = device
         self.dexhand = dexhand
         self.data = None

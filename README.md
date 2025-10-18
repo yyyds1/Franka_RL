@@ -43,18 +43,17 @@ This repository provides RL framework for Dexhand and robotics arm manipulation 
     |------|------|------|------|
     | Dexhand | Shadow Hand | source/Franka_RL/Franka_RL/robots/Shadow.py | origin/master|
 
-    For instance, the dexhand models can be loaded into environments through `DexHandFactory` class:
+    For instance, the dexhand models can be loaded into environments through `RobotFactory` class:
     ```python
-    from Franka_RL.robots import DexHandFactory
-    robot = DexHandFactory.create_hand(
-        dexhand_type=your_dexhand_name, 
-        side=your_dexhand_side
+    from Franka_RL.robots import RobotFactory
+    robot = RobotFactory.create_robot(
+        robot_type=your_robot_name, 
     )
     ```
  - To customize your own robot models, please refer to the examples in `source/Franka_RL/Franka_RL/robots`. Follow these steps: 
-    1. (Optional) Create a new Factory class e.g. `RobotFactory` in `source/Franka_RL/Franka_RL/robots/factory.py`.
-    2. (Optional) Create a new Base class e.g `BaseRobot` in `source/Franka_RL/Franka_RL/robots/base.py`.
-    3. Create your robot class in `source/Franka_RL/Franka_RL/robots`. Ensure that the robot class inherits from one of the Base class (e.g. `Dexhand` or `BaseRobot`), and it's properly registered in `__init__.py` 
+    1. (Optional) Create a new Base class e.g `Dexhand` in `source/Franka_RL/Franka_RL/robots/base.py`.
+    2. Create your robot class in `source/Franka_RL/Franka_RL/robots`. Ensure that the robot class inherits from one of the Base class (e.g. `Dexhand`).
+    3. Register the robot in `__init__.py`.
 
 ## Datasets
 

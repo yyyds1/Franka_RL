@@ -67,7 +67,7 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=2.0, replicate_physics=False)
 
     # robot
-    robot = 'shadow'
+    robot = 'shadow_rh'
     side = 'right'
         
     # dataset

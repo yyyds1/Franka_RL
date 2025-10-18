@@ -1,9 +1,9 @@
 from .base import DexHand
 
 import os
-from .factory import DexHandFactory
+from .factory import RobotFactory
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 base_package = __name__
 
-DexHandFactory.auto_register_hands(current_dir, base_package)
+RobotFactory.auto_register_robots(current_dir, base_package)

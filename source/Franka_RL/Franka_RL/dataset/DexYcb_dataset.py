@@ -1,8 +1,8 @@
-from .base import DemoData
+from .base import DexhandData
 from .decorators import register_dataset
 
 @register_dataset("DexYcb")
-class DexYcbDataset(DemoData):
+class DexYcbDataset(DexhandData):
     def __init__(
         self, 
         *, 

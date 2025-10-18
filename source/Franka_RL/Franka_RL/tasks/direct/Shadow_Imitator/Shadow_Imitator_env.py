@@ -32,7 +32,7 @@ from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.sensors import Camera
 
 from .Shadow_Imitator_env_cfg import ShandImitatorEnvCfg
-from Franka_RL.robots import DexHandFactory
+from Franka_RL.robots import RobotFactory
 from Franka_RL.dataset import DataFactory
 
 def normalize_angle(x):
@@ -72,7 +72,7 @@ class ShandImitator(DirectRLEnv):
 
     def _init_traj(self):
 
-        self.dataset = DataFactory.create_data(data_type=self.cfg.dataset_type, side=self.cfg.side, device=self.device, dexhand=self.dexhand)
+        self.dataset = DataFactory.create_data(data_type=self.cfg.dataset_type, device=self.device, dexhand=self.dexhand)
         self.traj_num = self.dataset.data["traj_num"]
         self.traj_len_max = self.dataset.data["max_traj_length"]
 
@@ -140,7 +140,7 @@ class ShandImitator(DirectRLEnv):
 
     def _setup_scene(self):
         # create robot
-        self.dexhand = DexHandFactory.create_hand(dexhand_type=self.cfg.robot, side=self.cfg.side)
+        self.dexhand = RobotFactory.create_robot(robot_type=self.cfg.robot)
         self.robot_cfg = ArticulationCfg(
             prim_path=f"/World/envs/env_.*/robot",
             spawn=sim_utils.UsdFileCfg(

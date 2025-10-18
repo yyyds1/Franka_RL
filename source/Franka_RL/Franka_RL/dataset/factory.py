@@ -12,10 +12,10 @@ class DataFactory:
         cls._registry[data_type] = data_class
 
     @classmethod
-    def create_data(cls, data_type: str, side: str, *args, **kwargs) -> DemoData:
-        assert side in ["left", "right"], f"Invalid side '{side}', must be 'left' or 'right'."
-        """Create a data instance by type."""
-        data_type += "_rh" if side == "right" else "_lh"
+    def create_data(cls, data_type: str, *args, **kwargs) -> DemoData:
+        # assert side in ["left", "right"], f"Invalid side '{side}', must be 'left' or 'right'."
+        # """Create a data instance by type."""
+        # data_type += "_rh" if side == "right" else "_lh"
         if data_type not in cls._registry:
             raise ValueError(f"Data type '{data_type}' not registered.")
         return cls._registry[data_type](*args, **kwargs)
