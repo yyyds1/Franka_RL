@@ -9,7 +9,7 @@ import torch
 from .base import DexhandData
 from .decorators import register_dataset
 
-from .transform import quat_to_aa
+from .transform import quat_to_aa, rotmat_to_quat
 
 @register_dataset("OakInkv2_rh")
 class OakInkv2Dataset(DexhandData):
@@ -92,7 +92,7 @@ class OakInkv2Dataset(DexhandData):
         extrinsics = torch.tensor(extrinsics, device=self.device)
 
         object_list = anno["obj_list"]
-        obj_id = program_info_selected["obj_list_rh"][0]
+        obj_id = [program_info_selected["obj_list_rh"][0]]
         obj_mesh_path = []
         for obj in obj_id:
             obj_filedir = os.path.join(self.data_dir, "object_preview", "align_ds", obj)
@@ -123,7 +123,8 @@ class OakInkv2Dataset(DexhandData):
             obj_transf = anno["obj_transf"]
             _object_pose = []
             for obj in obj_id:
-                _object_pose.append(obj_transf[obj][frame_id][:3, :])
+                p, q = obj_transf[obj][frame_id][:3, 3], rotmat_to_quat(obj_transf[obj][frame_id][:3, :3])
+                _object_pose.append(torch.cat([p, q], dim=-1))
             object_pose.append(_object_pose)
         
         hand_pose = torch.cat(hand_pose, dim=0)
@@ -134,7 +135,7 @@ class OakInkv2Dataset(DexhandData):
             hand_pose=hand_pose,
             object_pose=object_pose,
             extrinsics=extrinsics,
-            object_ids=obj_id,
+            obj_ids=obj_id,
             hand_shape=hand_shape,
             object_mesh_file=obj_mesh_path,
             capture_name=capture_name,

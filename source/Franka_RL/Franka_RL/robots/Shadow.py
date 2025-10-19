@@ -127,6 +127,26 @@ class Shadow(DexHand, ABC):
             "level_1_joints": [1, 3, 4, 5, 6, 7, 8, 9, 10, 12],
             "level_2_joints": [2, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
         }
+        self.retargeting_cfg = {
+            "type": "position",
+            "urdf_path": "",
+            "target_joint_names": None,
+            "target_link_names": [
+                "thtip", 
+                "fftip", 
+                "mftip", 
+                "rftip", 
+                "lftip",
+                "thmiddle", 
+                "ffmiddle", 
+                "mfmiddle", 
+                "rfmiddle", 
+                "lfmiddle", 
+            ],
+            "target_link_human_indices": [4, 8, 12, 16, 20, 2, 6, 10, 14, 18],
+            "add_dummy_free_joint": True,
+            "low_pass_alpha": 1,
+        }
 
     def __str__(self):
         return self.name
@@ -136,7 +156,8 @@ class ShadowRH(Shadow):
     def __init__(self):
         super().__init__()
         self._usd_path = "./assets/Shadow/shadow_hand_right.usd"
-        self.side = "rh"
+        self.retargeting_cfg["urdf_path"] = "assets/Shadow/shadow_hand_right_woarm.urdf"
+        self.side = "right"
 
     def __str__(self):
         return super().__str__() + "_rh"

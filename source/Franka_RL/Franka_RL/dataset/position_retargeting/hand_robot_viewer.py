@@ -14,6 +14,10 @@ from dex_retargeting.retargeting_config import RetargetingConfig
 from dex_retargeting.seq_retarget import SeqRetargeting
 from hand_viewer import HandDatasetSAPIENViewer
 
+from Franka_RL.robots import DexHand
+from Franka_RL.dataset import DexhandData
+from Franka_RL.dataset.transform import quat_to_rotmat
+
 ROBOT2MANO = np.array(
     [
         [0, 0, -1],
@@ -37,10 +41,11 @@ def prepare_vector_retargeting(joint_pos: np.array, link_hand_indices_pairs: np.
 
 
 class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
-    def __init__(self, robot_names: List[RobotName], hand_type: HandType, headless=False, use_ray_tracing=False):
+    def __init__(self, robot: List[DexHand], hand_type: HandType, headless=False, use_ray_tracing=False):
         super().__init__(headless=headless, use_ray_tracing=use_ray_tracing)
 
-        self.robot_names = robot_names
+        self.dexhands = robot
+        self.robot_names = [dexhand.name for dexhand in robot]
         self.robots: List[sapien.Articulation] = []
         self.robot_file_names: List[str] = []
         self.retargetings: List[SeqRetargeting] = []
@@ -50,12 +55,11 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
         loader = self.scene.create_urdf_loader()
         loader.fix_root_link = True
         loader.load_multiple_collisions_from_file = True
-        for robot_name in robot_names:
-            config_path = get_default_config_path(robot_name, RetargetingType.position, hand_type)
+        for dexhand in self.dexhands:
 
             # Add 6-DoF dummy joint at the root of each robot to make them move freely in the space
             override = dict(add_dummy_free_joint=True)
-            config = RetargetingConfig.load_from_file(config_path, override=override)
+            config = RetargetingConfig.from_dict(dexhand.retargeting_cfg, override=override)
             retargeting = config.build()
             robot_file_name = Path(config.urdf_path).stem
             self.robot_file_names.append(robot_file_name)
@@ -130,6 +134,9 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
             )
 
         if record_traj:
+            data = {}
+            for dexhand in self.dexhands:
+                data[dexhand.name] = DexhandData.empty_traj(num_frame - start_frame, data["obj_ids"][0], dexhand)
             
 
         # Loop rendering
@@ -144,10 +151,10 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
                 pos_quat = object_pose_frame[k]
 
                 # Quaternion convention: xyzw -> wxyz
-                pose = sapien.Pose(pos_quat[:3], pos_quat[3:])
+                pose = self.camera_pose * sapien.Pose(pos_quat[4:], np.concatenate([pos_quat[3:4], pos_quat[:3]]))
                 self.objects[k].set_pose(pose)
                 for copy_ind in range(num_copy):
-                    self.objects[k + copy_ind * num_objects].set_pose(sapien.Pose(pos_quat[:3] + pose_offsets[copy_ind], pos_quat[3:]))
+                    self.objects[k + copy_ind * num_objects].set_pose(pos_quat[:3] + pose_offsets[copy_ind], pos_quat[3:])
 
             # Update pose for human hand
             self._update_hand(vertex)
@@ -168,6 +175,33 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
             else:
                 for _ in range(step_per_frame):
                     self.viewer.render()
+
+            if record_traj:
+                for robot, dexhand, copy_ind in zip(self.robots, self.dexhands, list(range(1, num_copy))):
+                    
+                    data[dexhand.name]["wrist_pos"][i - start_frame, :3] = robot.get_root_pose.p - pose_offsets[copy_ind]
+                    data[dexhand.name]["wrist_pos"][i - start_frame, 3:] = robot.get_root_pose.q
+                    
+                    def get_indices(list1: List, list2: List):
+                        return [list2.index(element) for element in list1]
+
+                    data[dexhand.name]["joints_pos"][i - start_frame] = robot.get_qpos[get_indices(dexhand.dof_names, [joint.name for joint in robot.get_active_joints()])]
+                    
+                    body_pos = [link.get_pose() for link in robot.get_links()]
+                    data[dexhand.name]["body_pos"][i - start_frame, :3] = body_pos[get_indices(dexhand.body_names, [link.name for link in robot.get_links()])].p
+                    data[dexhand.name]["body_pos"][i - start_frame, 3:] = body_pos[get_indices(dexhand.body_names, [link.name for link in robot.get_links()])].q
+                    
+                    obj_pos = self.objects[copy_ind * num_objects].get_pose()
+                    data[dexhand.name]["obj_pose"][i - start_frame, :3] = obj_pos.p - pose_offsets[copy_ind]
+                    data[dexhand.name]["obj_pose"][i - start_frame, 3:] = obj_pos.q
+        
+        if record_traj:
+            for dexhand in self.dexhands:
+                data[dexhand.name]["wrist_vel"][:, :3] = DexhandData.compute_velocity(data[dexhand.name]["wrist_pos"][:, :3])
+                data[dexhand.name]["wrist_vel"][:, 3:] = DexhandData.compute_angular_velocity(quat_to_rotmat(data[dexhand.name]["wrist_pos"][:, 3:]))
+                data[dexhand.name]["body_vel"][:, :3] = DexhandData.compute_velocity(data[dexhand.name]["body_pos"][:, :, :3])
+                data[dexhand.name]["body_vel"][:, 3:] = DexhandData.compute_angular_velocity(quat_to_rotmat(data[dexhand.name]["body_pos"][:, :, 3:]))
+
 
         if not self.headless:
             self.viewer.paused = True

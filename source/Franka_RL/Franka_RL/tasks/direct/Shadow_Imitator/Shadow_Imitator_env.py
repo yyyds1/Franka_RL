@@ -94,6 +94,7 @@ class ShandImitator(DirectRLEnv):
         self.target_tip_distance_seq = self.dataset.data["tip_distance"][self.target_jt_i]
         self.obj_id_seq = self.dataset.data["obj_id"]
         self.obj_pcl = self.dataset.data["obj_pcl"]
+        self.obj_pcl_seq = torch.tensor([self.obj_pcl[obj_id] for obj_id in self.obj_id_seq]).to(device=self.device)
 
         # self.target_wrist_pos = self.target_wrist_pos_seq[:, self.target_jt_j]
         # self.target_wrist_vel = self.target_wrist_vel_seq[:, self.target_jt_j]
@@ -276,7 +277,7 @@ class ShandImitator(DirectRLEnv):
         self.obj_pos = self.object.root_state_w[:, :7]
         self.obj_vel = self.object.root_state_w[:, 7:]
         self.obj_com_pos = transform_points(self.object.data.body_com_pos_b, self.obj_pos[:, :3], self.obj_pos[:, 3:]).squeeze()
-        self.obj_curr_pcl = transform_points(self.obj_pcl[self.obj_id_seq], self.obj_pos[:, :3], self.obj_pos[:, 3:])
+        self.obj_curr_pcl = transform_points(self.obj_pcl_seq, self.obj_pos[:, :3], self.obj_pos[:, 3:])
         
 
     def _get_observations(self) -> dict:

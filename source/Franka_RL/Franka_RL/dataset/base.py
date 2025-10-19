@@ -8,6 +8,7 @@ from torch.utils.data import Dataset
 from pytorch3d.ops import sample_points_from_meshes
 from termcolor import cprint
 import pickle
+from Franka_RL.robots import DexHand
 
 
 class DexhandData(Dataset, ABC):
@@ -112,6 +113,23 @@ class DexhandData(Dataset, ABC):
         torch.cuda.set_rng_state(torch_random_state_cuda)
 
         return rs_verts_obj
+    
+    @staticmethod
+    def empty_traj(traj_len, obj_id, dexhand: DexHand):
+        data = {}
+        data["traj_len"] = traj_len
+        data["dexhand"] = dexhand.name
+        data["obj_id"] = obj_id
+        data["wrist_pos"] = torch.zeros((traj_len, 7), dtype=torch.float32)
+        data["wrist_vel"] = torch.zeros((traj_len, 6), dtype=torch.float32)
+        data["joints_pos"] = torch.zeros((traj_len, dexhand.n_dofs), dtype=torch.float32)
+        data["body_pos"] = torch.zeros((traj_len, dexhand.n_bodies, 7), dtype=torch.float32)
+        data["body_vel"] = torch.zeros((traj_len, dexhand.n_bodies, 6), dtype=torch.float32)
+        data["obj_pose"] = torch.zeros((traj_len, 7), dtype=torch.float32)
+        data["obj_vel"] = torch.zeros((traj_len, 6), dtype=torch.float32)
+        data["tip_distance"] = torch.zeros((traj_len), dtype=torch.float32)
+
+        return data
 
     # def process_data(self, data, idx, rs_verts_obj):
     #     data["obj_trajectory"] = self.mujoco2gym_transf @ data["obj_trajectory"]
@@ -222,3 +240,5 @@ class DexhandData(Dataset, ABC):
     #         # data["opt_joints_pos"] = data["opt_joints_pos"][: self.max_seq_len]
     #         # data["opt_joints_velocity"] = data["opt_joints_velocity"][: self.max_seq_len]
     #     assert len(data["opt_wrist_pos"]) == len(data["obj_trajectory"])
+
+

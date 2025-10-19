@@ -16,6 +16,7 @@ class DexHand(ABC):
         self.actuators = None
         self.dof_limit = None
         self.weight_idx = None
+        self.retargeting_cfg = None
 
     
     @property
