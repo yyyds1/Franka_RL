@@ -1,8 +1,8 @@
-from .factory import DexHandFactory
+from .factory import RobotFactory
 
 def register_dexhand(dexhand_type):
     def decorator(cls):
-        DexHandFactory.register(dexhand_type, cls)
+        RobotFactory.register(dexhand_type, cls)
         return cls
 
     return decorator

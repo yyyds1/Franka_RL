@@ -1,3 +1,9 @@
+import argparse
+from isaaclab.app import AppLauncher
+
+# launch omniverse app
+app_launcher = AppLauncher({"headless": True})
+simulation_app = app_launcher.app
 from pathlib import Path
 from typing import Optional, Tuple, List
 
@@ -10,7 +16,7 @@ from hand_robot_viewer import RobotHandDatasetSAPIENViewer
 from hand_viewer import HandDatasetSAPIENViewer
 
 from Franka_RL.dataset import DataFactory
-from Franka_RL.robots import DexHandFactory
+from Franka_RL.robots import RobotFactory
 
 # For numpy version compatibility
 np.bool = bool
@@ -22,24 +28,22 @@ np.object = object
 np.unicode = np.unicode_
 
 
-def mano2dexhand(dataset: str, data_root: Path, robots: Optional[List[RobotName]], fps: int):
+def mano2dexhand(dataset: str, data_root: Path, robots: Optional[List[str]]):
     for robot in robots:
-        dexhand = DexHandFactory.create_robot(robot)
+        dexhand = RobotFactory.create_robot(robot)
         dataset = DataFactory.create_data(dataset, data_path=data_root, dexhand=dexhand)
-        viewer = RobotHandDatasetSAPIENViewer(list([robot]), HandType.right if dexhand.side == "right" else HandType.left, headless=True, use_ray_tracing=True)
+        viewer = RobotHandDatasetSAPIENViewer([dexhand], HandType.right if dexhand.side == "right" else HandType.left, headless=True, use_ray_tracing=True)
 
         # Data ID, feel free to change it to visualize different trajectory
-        data_id = 4
+        data_id_available = dataset.available_index()
 
-        sampled_data = dataset[data_id]
-        for key, value in sampled_data.items():
-            if "pose" not in key:
-                print(f"{key}: {value}")
+        sampled_data = dataset[data_id_available[0]]
+        
         viewer.load_object_hand(sampled_data)
-        viewer.render_dexycb_data(sampled_data, fps)
+        viewer.render_data(sampled_data, fps=dataset.fps, record_traj=True)
 
 
-def main(dataset: str, dataset_dir: str, robots: Optional[List[RobotName]] = None, fps: int = 10):
+def main(dataset: str, dataset_dir: str, robots: Optional[List[str]] = None):
     """
     Render the human and robot trajectories for grasping object inside DexYCB dataset.
     The human trajectory is visualized as provided, while the robot trajectory is generated from position retargeting
@@ -56,7 +60,7 @@ def main(dataset: str, dataset_dir: str, robots: Optional[List[RobotName]] = Non
     else:
         print(f"Using DexYCB dir: {data_root}")
 
-    mano2dexhand(dataset, data_root, robots, fps)
+    mano2dexhand(dataset, data_root, robots)
 
 
 if __name__ == "__main__":

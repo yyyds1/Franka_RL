@@ -1,22 +1,28 @@
 import tempfile
 from pathlib import Path
 from typing import Dict, List
+import os
+import json
 
 import numpy as np
+import torch
 import cv2
 from tqdm import trange
 import sapien
 import transforms3d.quaternions
+import trimesh
 
 from dex_retargeting import yourdfpy as urdf
 from dex_retargeting.constants import RobotName, HandType, get_default_config_path, RetargetingType
-from dex_retargeting.retargeting_config import RetargetingConfig
+from retargeting_config import RetargetingConfig
+# from dex_retargeting.retargeting_config import RetargetingConfig
 from dex_retargeting.seq_retarget import SeqRetargeting
 from hand_viewer import HandDatasetSAPIENViewer
 
-from Franka_RL.robots import DexHand
 from Franka_RL.dataset import DexhandData
+from Franka_RL.robots import DexHand
 from Franka_RL.dataset.transform import quat_to_rotmat
+
 
 ROBOT2MANO = np.array(
     [
@@ -135,9 +141,10 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
 
         if record_traj:
             data = {}
+            mesh = trimesh.load(data["object_mesh_file"][0], process=False, force="mesh")
             for dexhand in self.dexhands:
                 data[dexhand.name] = DexhandData.empty_traj(num_frame - start_frame, data["obj_ids"][0], dexhand)
-            
+                data[dexhand.name]["obj_pcl"] = DexhandData.random_sampling_pc(mesh)
 
         # Loop rendering
         step_per_frame = int(60 / fps)
@@ -194,6 +201,10 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
                     obj_pos = self.objects[copy_ind * num_objects].get_pose()
                     data[dexhand.name]["obj_pose"][i - start_frame, :3] = obj_pos.p - pose_offsets[copy_ind]
                     data[dexhand.name]["obj_pose"][i - start_frame, 3:] = obj_pos.q
+
+                    curr_obj_pcl = (quat_to_rotmat(obj_pos.q) @ data[dexhand.name]["obj_pcl"].T[None]).transpose(-1, -2) + obj_pos.p - pose_offsets[copy_ind]
+                    tips = joint[16:, :]
+                    data[dexhand.name]["tip_distance"][i - start_frame] = DexhandData.compute_chamfer_distance(tips, curr_obj_pcl)
         
         if record_traj:
             for dexhand in self.dexhands:
@@ -201,6 +212,16 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
                 data[dexhand.name]["wrist_vel"][:, 3:] = DexhandData.compute_angular_velocity(quat_to_rotmat(data[dexhand.name]["wrist_pos"][:, 3:]))
                 data[dexhand.name]["body_vel"][:, :3] = DexhandData.compute_velocity(data[dexhand.name]["body_pos"][:, :, :3])
                 data[dexhand.name]["body_vel"][:, 3:] = DexhandData.compute_angular_velocity(quat_to_rotmat(data[dexhand.name]["body_pos"][:, :, 3:]))
+
+                save_file = f"{data['capture_name']}_{dexhand.name}.json"
+                save_path = os.path.join(data["data_dir"], "retargeting_result", save_file)
+
+                for key, val in data[dexhand.name].items():
+                    if type(val) is torch.Tensor:
+                        data[dexhand.name][key] = val.to_list()
+
+                with open(save_path, mode='w', encoding='utf-8') as f:
+                    json.dump(data[dexhand.name], f, indent=4)
 
 
         if not self.headless:

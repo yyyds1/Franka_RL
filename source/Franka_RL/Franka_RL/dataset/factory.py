@@ -1,6 +1,6 @@
 import os
 import importlib
-from .base import DemoData
+from .base import DexhandData
 
 
 class DataFactory:
@@ -12,7 +12,7 @@ class DataFactory:
         cls._registry[data_type] = data_class
 
     @classmethod
-    def create_data(cls, data_type: str, *args, **kwargs) -> DemoData:
+    def create_data(cls, data_type: str, *args, **kwargs) -> DexhandData:
         # assert side in ["left", "right"], f"Invalid side '{side}', must be 'left' or 'right'."
         # """Create a data instance by type."""
         # data_type += "_rh" if side == "right" else "_lh"

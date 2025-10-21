@@ -9,6 +9,7 @@ from pytorch3d.ops import sample_points_from_meshes
 from termcolor import cprint
 import pickle
 from Franka_RL.robots import DexHand
+import chamfer_distance as chd
 
 
 class DexhandData(Dataset, ABC):
@@ -28,6 +29,7 @@ class DexhandData(Dataset, ABC):
         self.device = device
         self.dexhand = dexhand
         self.data = None
+        self.fps = None
         # self.traj_num = 0
         # self.max_traj_length = 0
         # self.traj_len = None # length of each traj [traj_num]
@@ -93,8 +95,15 @@ class DexhandData(Dataset, ABC):
         if guassian_filter:
             velocity = gaussian_filter1d(velocity, 2, axis=0, mode="nearest")
         return torch.from_numpy(velocity).to(dof)
+    
+    @staticmethod
+    def compute_chamfer_distance(tips, obj_verts_transf):
+        ch_dist = chd.ChamferDistance()
+        tips_near, _, _, _ = ch_dist(tips, obj_verts_transf)
+        return torch.sqrt(tips_near)
 
-    def random_sampling_pc(self, mesh):
+    @staticmethod
+    def random_sampling_pc(mesh):
         numpy_random_state = np.random.get_state()
         torch_random_state = torch.random.get_rng_state()
         torch_random_state_cuda = torch.cuda.get_rng_state()
@@ -105,7 +114,7 @@ class DexhandData(Dataset, ABC):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-        rs_verts_obj = sample_points_from_meshes(mesh, 1000, return_normals=False).to(self.device).squeeze(0)
+        rs_verts_obj = sample_points_from_meshes(mesh, 2048, return_normals=False).squeeze(0)
 
         # reset seed
         np.random.set_state(numpy_random_state)
@@ -113,7 +122,9 @@ class DexhandData(Dataset, ABC):
         torch.cuda.set_rng_state(torch_random_state_cuda)
 
         return rs_verts_obj
-    
+
+
+
     @staticmethod
     def empty_traj(traj_len, obj_id, dexhand: DexHand):
         data = {}
@@ -127,6 +138,7 @@ class DexhandData(Dataset, ABC):
         data["body_vel"] = torch.zeros((traj_len, dexhand.n_bodies, 6), dtype=torch.float32)
         data["obj_pose"] = torch.zeros((traj_len, 7), dtype=torch.float32)
         data["obj_vel"] = torch.zeros((traj_len, 6), dtype=torch.float32)
+        data["obj_pcl"] = torch.zeros((2048, 3), dtype=torch.float32)
         data["tip_distance"] = torch.zeros((traj_len), dtype=torch.float32)
 
         return data

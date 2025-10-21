@@ -13,6 +13,7 @@
 **/*.usda
 **/*.usdc
 **/*.usdz
+**/*.urdf
 
 # Python
 .DS_Store
@@ -75,3 +76,5 @@ tests/
 **/mnt/*
 **/ckpt/*
 **/*.pth
+/assets/*
+**/manopth/*

@@ -12,7 +12,7 @@ from .decorators import register_dataset
 from .transform import quat_to_aa, rotmat_to_quat
 
 @register_dataset("OakInkv2_rh")
-class OakInkv2Dataset(DexhandData):
+class OakInkv2DatasetRH(DexhandData):
     def __init__(
         self, 
         *, 
@@ -30,6 +30,7 @@ class OakInkv2Dataset(DexhandData):
         self.data_pathes = pathes
         # * We use the first 5 digits of hash as the index
         self.seq_hashes = {os.path.split(p)[-1].split("_")[5][:5]: i for i, p in enumerate(pathes)}
+        self.fps = 60
 
     def __getitem__(self, index):
         capture_name = index
@@ -132,6 +133,7 @@ class OakInkv2Dataset(DexhandData):
         object_pose = torch.tensor(object_pose, device=self.device)
 
         data = dict(
+            data_dir=self.data_dir,
             hand_pose=hand_pose,
             object_pose=object_pose,
             extrinsics=extrinsics,

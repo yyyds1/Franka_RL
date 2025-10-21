@@ -1,8 +1,11 @@
 dex_retargeting
+chumpy
+opencv-python
 tyro
 pyyaml
 sapien==3.0.0b0
 loguru==0.6.0
 iopath
 pytorch3d @ "git+https://github.com/facebookresearch/pytorch3d.git"
-git+https://github.com/Silverster98/pointops
+pointops @ git+https://github.com/Silverster98/pointops
+chamfer_distance @ git+https://github.com/otaheri/chamfer_distance@f86f6f7cadd3aca642704573d1626c67ca2e2846

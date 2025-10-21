@@ -91,10 +91,9 @@ class ShandImitator(DirectRLEnv):
         self.target_body_vel_seq = self.dataset.data["body_vel"][self.target_jt_i]
         self.target_obj_pos_seq = self.dataset.data["obj_pose"][self.target_jt_i]
         self.target_obj_vel_seq = self.dataset.data["obj_vel"][self.target_jt_i]
+        self.obj_pcl_seq = self.dataset.data["obj_pcl"][self.target_jt_i]
         self.target_tip_distance_seq = self.dataset.data["tip_distance"][self.target_jt_i]
         self.obj_id_seq = self.dataset.data["obj_id"]
-        self.obj_pcl = self.dataset.data["obj_pcl"]
-        self.obj_pcl_seq = torch.tensor([self.obj_pcl[obj_id] for obj_id in self.obj_id_seq]).to(device=self.device)
 
         # self.target_wrist_pos = self.target_wrist_pos_seq[:, self.target_jt_j]
         # self.target_wrist_vel = self.target_wrist_vel_seq[:, self.target_jt_j]
