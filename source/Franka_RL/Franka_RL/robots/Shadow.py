@@ -157,6 +157,7 @@ class ShadowRH(Shadow):
         super().__init__()
         self._usd_path = "./assets/Shadow/shadow_hand_right.usd"
         self.retargeting_cfg["urdf_path"] = "assets/Shadow/shadow_hand_right_woarm.urdf"
+        # self.retargeting_cfg["urdf_path"] = "assets/Shadow/shadow_hand_right_glb.urdf"
         self.side = "right"
 
     def __str__(self):

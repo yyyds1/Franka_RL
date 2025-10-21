@@ -10,12 +10,13 @@ import cv2
 from tqdm import trange
 import sapien
 import transforms3d.quaternions
+from pytorch3d.structures import Meshes
 import trimesh
 
 from dex_retargeting import yourdfpy as urdf
 from dex_retargeting.constants import RobotName, HandType, get_default_config_path, RetargetingType
-from retargeting_config import RetargetingConfig
-# from dex_retargeting.retargeting_config import RetargetingConfig
+# from retargeting_config import RetargetingConfig
+from dex_retargeting.retargeting_config import RetargetingConfig
 from dex_retargeting.seq_retarget import SeqRetargeting
 from hand_viewer import HandDatasetSAPIENViewer
 
@@ -73,8 +74,8 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
 
             # Build robot
             urdf_path = Path(config.urdf_path)
-            if "glb" not in urdf_path.stem:
-                urdf_path = urdf_path.with_stem(urdf_path.stem + "_glb")
+            # if "glb" not in urdf_path.stem:
+            #     urdf_path = urdf_path.with_stem(urdf_path.stem + "_glb")
             robot_urdf = urdf.URDF.load(str(urdf_path), add_dummy_free_joints=True, build_scene_graph=False)
             urdf_name = urdf_path.name
             temp_dir = tempfile.mkdtemp(prefix="dex_retargeting-")
@@ -132,7 +133,7 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
                 break
 
         if self.headless:
-            robot_names = [robot.name for robot in self.robot_names]
+            robot_names = self.robot_names.copy()
             robot_names = "_".join(robot_names)
             video_path = Path(__file__).parent.resolve() / f"data/{robot_names}_video.mp4"
             writer = cv2.VideoWriter(
@@ -140,11 +141,15 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
             )
 
         if record_traj:
-            data = {}
+            save_data = {}
             mesh = trimesh.load(data["object_mesh_file"][0], process=False, force="mesh")
+            mesh = Meshes(
+                verts=torch.from_numpy(mesh.vertices[None, ...].astype(np.float32)),
+                faces=torch.from_numpy(mesh.faces[None, ...].astype(np.float32)),
+            )
             for dexhand in self.dexhands:
-                data[dexhand.name] = DexhandData.empty_traj(num_frame - start_frame, data["obj_ids"][0], dexhand)
-                data[dexhand.name]["obj_pcl"] = DexhandData.random_sampling_pc(mesh)
+                save_data[dexhand.name] = DexhandData.empty_traj(num_frame - start_frame, data["obj_ids"][0], dexhand)
+                save_data[dexhand.name]["obj_pcl"] = DexhandData.random_sampling_pc(mesh).numpy()
 
         # Loop rendering
         step_per_frame = int(60 / fps)
@@ -161,7 +166,7 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
                 pose = self.camera_pose * sapien.Pose(pos_quat[4:], np.concatenate([pos_quat[3:4], pos_quat[:3]]))
                 self.objects[k].set_pose(pose)
                 for copy_ind in range(num_copy):
-                    self.objects[k + copy_ind * num_objects].set_pose(pos_quat[:3] + pose_offsets[copy_ind], pos_quat[3:])
+                    self.objects[k + copy_ind * num_objects].set_pose(pose_offsets[copy_ind] * pose)
 
             # Update pose for human hand
             self._update_hand(vertex)
@@ -186,42 +191,42 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
             if record_traj:
                 for robot, dexhand, copy_ind in zip(self.robots, self.dexhands, list(range(1, num_copy))):
                     
-                    data[dexhand.name]["wrist_pos"][i - start_frame, :3] = robot.get_root_pose.p - pose_offsets[copy_ind]
-                    data[dexhand.name]["wrist_pos"][i - start_frame, 3:] = robot.get_root_pose.q
+                    save_data[dexhand.name]["wrist_pos"][i - start_frame, :3] = robot.root_pose.p - pose_offsets[copy_ind].p
+                    save_data[dexhand.name]["wrist_pos"][i - start_frame, 3:] = robot.root_pose.q
                     
                     def get_indices(list1: List, list2: List):
                         return [list2.index(element) for element in list1]
 
-                    data[dexhand.name]["joints_pos"][i - start_frame] = robot.get_qpos[get_indices(dexhand.dof_names, [joint.name for joint in robot.get_active_joints()])]
+                    save_data[dexhand.name]["joints_pos"][i - start_frame] = robot.qpos[get_indices(dexhand.dof_names, [joint.name for joint in robot.active_joints])]
                     
-                    body_pos = [link.get_pose() for link in robot.get_links()]
-                    data[dexhand.name]["body_pos"][i - start_frame, :3] = body_pos[get_indices(dexhand.body_names, [link.name for link in robot.get_links()])].p
-                    data[dexhand.name]["body_pos"][i - start_frame, 3:] = body_pos[get_indices(dexhand.body_names, [link.name for link in robot.get_links()])].q
+                    body_pos = np.array([np.concatenate([link.pose.p, link.pose.q], axis=-1) for link in robot.links], dtype=np.float32)
+                    save_data[dexhand.name]["body_pos"][i - start_frame] = body_pos[get_indices(dexhand.body_names, [link.name for link in robot.links])]
                     
-                    obj_pos = self.objects[copy_ind * num_objects].get_pose()
-                    data[dexhand.name]["obj_pose"][i - start_frame, :3] = obj_pos.p - pose_offsets[copy_ind]
-                    data[dexhand.name]["obj_pose"][i - start_frame, 3:] = obj_pos.q
+                    obj_pos = self.objects[copy_ind * num_objects].pose
+                    save_data[dexhand.name]["obj_pose"][i - start_frame, :3] = obj_pos.p - pose_offsets[copy_ind].p
+                    save_data[dexhand.name]["obj_pose"][i - start_frame, 3:] = obj_pos.q
 
-                    curr_obj_pcl = (quat_to_rotmat(obj_pos.q) @ data[dexhand.name]["obj_pcl"].T[None]).transpose(-1, -2) + obj_pos.p - pose_offsets[copy_ind]
-                    tips = joint[16:, :]
-                    data[dexhand.name]["tip_distance"][i - start_frame] = DexhandData.compute_chamfer_distance(tips, curr_obj_pcl)
+                    curr_obj_pcl = (quat_to_rotmat(obj_pos.q) @ save_data[dexhand.name]["obj_pcl"].T).transpose(-1, -2) + obj_pos.p - pose_offsets[copy_ind].p
+                    curr_obj_pcl = torch.tensor(curr_obj_pcl).unsqueeze(0)
+                    tips = torch.tensor(joint[16:, :]).unsqueeze(0)
+                    save_data[dexhand.name]["tip_distance"][i - start_frame] = DexhandData.compute_chamfer_distance(tips, curr_obj_pcl).squeeze(0).numpy()
         
         if record_traj:
             for dexhand in self.dexhands:
-                data[dexhand.name]["wrist_vel"][:, :3] = DexhandData.compute_velocity(data[dexhand.name]["wrist_pos"][:, :3])
-                data[dexhand.name]["wrist_vel"][:, 3:] = DexhandData.compute_angular_velocity(quat_to_rotmat(data[dexhand.name]["wrist_pos"][:, 3:]))
-                data[dexhand.name]["body_vel"][:, :3] = DexhandData.compute_velocity(data[dexhand.name]["body_pos"][:, :, :3])
-                data[dexhand.name]["body_vel"][:, 3:] = DexhandData.compute_angular_velocity(quat_to_rotmat(data[dexhand.name]["body_pos"][:, :, 3:]))
+                save_data[dexhand.name]["wrist_vel"][:, :3] = DexhandData.compute_velocity(save_data[dexhand.name]["wrist_pos"][:, :3], time_delta=1/fps)
+                save_data[dexhand.name]["wrist_vel"][:, 3:] = DexhandData.compute_angular_velocity(quat_to_rotmat(data[dexhand.name]["wrist_pos"][:, 3:]))
+                save_data[dexhand.name]["body_vel"][:, :3] = DexhandData.compute_velocity(data[dexhand.name]["body_pos"][:, :, :3])
+                save_data[dexhand.name]["body_vel"][:, 3:] = DexhandData.compute_angular_velocity(quat_to_rotmat(data[dexhand.name]["body_pos"][:, :, 3:]))
 
                 save_file = f"{data['capture_name']}_{dexhand.name}.json"
                 save_path = os.path.join(data["data_dir"], "retargeting_result", save_file)
 
                 for key, val in data[dexhand.name].items():
                     if type(val) is torch.Tensor:
-                        data[dexhand.name][key] = val.to_list()
+                        save_data[dexhand.name][key] = val.to_list()
 
                 with open(save_path, mode='w', encoding='utf-8') as f:
-                    json.dump(data[dexhand.name], f, indent=4)
+                    json.dump(save_data[dexhand.name], f, indent=4)
 
 
         if not self.headless:

@@ -131,15 +131,15 @@ class DexhandData(Dataset, ABC):
         data["traj_len"] = traj_len
         data["dexhand"] = dexhand.name
         data["obj_id"] = obj_id
-        data["wrist_pos"] = torch.zeros((traj_len, 7), dtype=torch.float32)
-        data["wrist_vel"] = torch.zeros((traj_len, 6), dtype=torch.float32)
-        data["joints_pos"] = torch.zeros((traj_len, dexhand.n_dofs), dtype=torch.float32)
-        data["body_pos"] = torch.zeros((traj_len, dexhand.n_bodies, 7), dtype=torch.float32)
-        data["body_vel"] = torch.zeros((traj_len, dexhand.n_bodies, 6), dtype=torch.float32)
-        data["obj_pose"] = torch.zeros((traj_len, 7), dtype=torch.float32)
-        data["obj_vel"] = torch.zeros((traj_len, 6), dtype=torch.float32)
-        data["obj_pcl"] = torch.zeros((2048, 3), dtype=torch.float32)
-        data["tip_distance"] = torch.zeros((traj_len), dtype=torch.float32)
+        data["wrist_pos"] = np.zeros((traj_len, 7), dtype=np.float32)
+        data["wrist_vel"] = np.zeros((traj_len, 6), dtype=np.float32)
+        data["joints_pos"] = np.zeros((traj_len, dexhand.n_dofs), dtype=np.float32)
+        data["body_pos"] = np.zeros((traj_len, dexhand.n_bodies, 7), dtype=np.float32)
+        data["body_vel"] = np.zeros((traj_len, dexhand.n_bodies, 6), dtype=np.float32)
+        data["obj_pose"] = np.zeros((traj_len, 7), dtype=np.float32)
+        data["obj_vel"] = np.zeros((traj_len, 6), dtype=np.float32)
+        data["obj_pcl"] = np.zeros((2048, 3), dtype=np.float32)
+        data["tip_distance"] = np.zeros((traj_len, 5), dtype=np.float32)
 
         return data
 

@@ -106,7 +106,6 @@ class OakInkv2DatasetRH(DexhandData):
         length = len(frame_id_list)
 
         hand_pose = []
-        hand_shape = []
         object_pose = []
 
         for frame_id in frame_id_list:
@@ -114,23 +113,22 @@ class OakInkv2DatasetRH(DexhandData):
             raw_mano = anno["raw_mano"][frame_id]
             rh_pose_coeffs = raw_mano["rh__pose_coeffs"]
             rh_tsl = raw_mano["rh__tsl"]
-            rh_betas = raw_mano["rh__betas"]
             rh_pose_coeffs = quat_to_aa(rh_pose_coeffs).view(1, 48)
             rh_pose_coeffs = torch.cat([rh_pose_coeffs, rh_tsl], dim=-1)
 
             hand_pose.append(rh_pose_coeffs)
-            hand_shape.append(rh_betas)
 
             obj_transf = anno["obj_transf"]
             _object_pose = []
             for obj in obj_id:
                 p, q = obj_transf[obj][frame_id][:3, 3], rotmat_to_quat(obj_transf[obj][frame_id][:3, :3])
-                _object_pose.append(torch.cat([p, q], dim=-1))
+                _object_pose.append(np.concatenate([p, q], axis=-1))
             object_pose.append(_object_pose)
         
-        hand_pose = torch.cat(hand_pose, dim=0)
-        hand_shape = torch.cat(hand_shape, dim=0)
-        object_pose = torch.tensor(object_pose, device=self.device)
+        hand_pose = np.array(hand_pose)
+        object_pose = np.array(object_pose)
+
+        hand_shape = anno["raw_mano"][frame_id_list[0]]["rh__betas"].view(10).numpy()
 
         data = dict(
             data_dir=self.data_dir,
@@ -156,7 +154,7 @@ class OakInkv2DatasetRH(DexhandData):
             else:
                 assert False, f"no intersection between {lst1} and {lst2}"
 
-        for seq_hash, idx in self.seq_hashes.items:
+        for seq_hash, idx in self.seq_hashes.items():
             program_filepath = os.path.join(
             self.data_dir,
             "program",
@@ -173,7 +171,7 @@ class OakInkv2DatasetRH(DexhandData):
                     right_hand_range = seg_pair_def[1]
 
                     if right_hand_range is not None:
-                        available_index_list.append(seq_hash + str(stage))
+                        available_index_list.append(seq_hash + '@' + str(stage))
                     
                     stage += 1
 

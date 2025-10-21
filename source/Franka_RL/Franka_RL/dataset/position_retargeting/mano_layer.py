@@ -4,6 +4,7 @@
 
 """Wrapper layer for manopth ManoLayer."""
 
+import os
 import torch
 
 from torch.nn import Module
@@ -26,7 +27,7 @@ class MANOLayer(Module):
         self._mano_layer = ManoLayer(flat_hand_mean=False,
                                      ncomps=45,
                                      side=self._side,
-                                     mano_root='manopth/mano/models',
+                                     mano_root=os.path.join(os.path.dirname(__file__), 'manopth/mano/models'),
                                      use_pca=True)
 
         b = torch.from_numpy(self._betas).unsqueeze(0)
