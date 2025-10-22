@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from curses import raw
 import os
 import statistics
 import time
@@ -50,7 +51,18 @@ class OnPolicyRunnerWithTransformer:
             raise ValueError(f"Training type not found for algorithm {self.alg_cfg['class_name']}.")
 
         # resolve dimensions of observations
-        obs, extras = self.env.get_observations()
+        raw = self.env.get_observations()
+        if isinstance(raw, tuple):
+            obs, extras = raw
+        else:
+        # 构造兼容结构
+            if isinstance(raw, dict):
+                obs = raw.get("policy", next(iter(raw.values())))
+                extras = {"observations": raw}
+            else:
+                obs = raw
+                extras = {"observations": {"policy": raw}}
+
         # num_obs = obs.shape[1]
         num_obs = train_cfg["num_obs"]
 
@@ -171,7 +183,18 @@ class OnPolicyRunnerWithTransformer:
             )
 
         # start learning
-        obs, extras = self.env.get_observations()
+        raw = self.env.get_observations()
+        if isinstance(raw, tuple):
+            obs, extras = raw
+        else:
+            # 构造兼容结构
+            if isinstance(raw, dict):
+                obs = raw.get("policy", next(iter(raw.values())))
+                extras = {"observations": raw}
+            else:
+                obs = raw
+                extras = {"observations": {"policy": raw}}
+
         privileged_obs = extras["observations"].get(self.privileged_obs_type, obs)
         obs, privileged_obs = obs.to(self.device), privileged_obs.to(self.device)
         self.train_mode()  # switch to train mode (for dropout for example)
