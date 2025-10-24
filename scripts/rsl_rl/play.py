@@ -85,17 +85,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     
     
     def get_cfg(cfg, key, default=None):
-        """从配置中获取值，兼容字典和对象"""
+        """Get value from config (dict or object)"""
         if isinstance(cfg, dict):
             return cfg.get(key, default)
         else:
             return getattr(cfg, key, default)
     
-    # grab task name for checkpoint path
+    # get task name for checkpoint path
     task_name = args_cli.task.split(":")[-1]
     train_task_name = task_name.replace("-Play", "")
 
-    # override configurations with non-hydra CLI arguments
+    # override config with CLI args
     agent_cfg = cli_args.update_rsl_rl_cfg_yaml(agent_cfg, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
 
@@ -103,7 +103,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.seed = get_cfg(agent_cfg, "seed")
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
-    # specify directory for logging experiments
+    # set log directory
     log_root_path = os.path.join("logs", "rsl_rl", get_cfg(agent_cfg, "experiment_name"))
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Loading experiment from directory: {log_root_path}")
@@ -124,10 +124,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     log_dir = os.path.dirname(resume_path)
 
-    # create isaac environment
+    # create Isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
-    # convert to single-agent instance if required by the RL algorithm
+    # convert to single-agent if needed
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
 
@@ -143,20 +143,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    # wrap around environment for rsl-rl
+    # wrap env for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=get_cfg(agent_cfg, "clip_actions"))
 
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     
-    # load previously trained model
+    # load trained model
     ppo_runner = OnPolicyRunnerWithTransformer(env, agent_cfg, log_dir=None, device=get_cfg(agent_cfg, "device"))
     ppo_runner.load(resume_path)
 
-    # obtain the trained policy for inference
+    # get trained policy for inference
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
 
-    # extract the neural network module
-    # we do this in a try-except to maintain backwards compatibility.
+    # extract neural network module (try-except for compatibility)
     try:
         # version 2.3 onwards
         policy_nn = ppo_runner.alg.policy
@@ -164,7 +163,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # version 2.2 and below
         policy_nn = ppo_runner.alg.actor_critic
 
-    # export policy to onnx/jit
+    # export policy to onnx/jit (optional)
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
     #export_policy_as_jit(policy_nn, ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.pt")
     #export_policy_as_onnx(
@@ -179,45 +178,45 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
-        # run everything in inference mode
+    # inference mode
         with torch.inference_mode():
-            # agent stepping
+            # agent step
             actions = policy(obs)
-            # env stepping
+            # env step
             obs, rews, terminated, infos = env.step(actions)
-        # 打印每个环境（机器人）episode结束的原因
+        # Print episode end reasons for each env
         if hasattr(infos, 'keys') and 'env' in infos:
-            # 兼容RSL-RL风格infos
+            # RSL-RL style infos
             env_infos = infos['env']
             if 'episode_end_reason' in env_infos:
                 reasons = env_infos['episode_end_reason']
                 for i, reason in enumerate(reasons):
-                    if reason != 0:  # 0通常表示未结束
+                    if reason != 0:  # 0 means not ended
                         print(f"[Episode End] Env {i}: reason={reason}")
         elif isinstance(infos, dict) and 'episode_end_reason' in infos:
             reasons = infos['episode_end_reason']
             for i, reason in enumerate(reasons):
                 if reason != 0:
                     print(f"[Episode End] Env {i}: reason={reason}")
-        # 你可以根据实际环境自定义reason的含义映射
+        # You can map reason codes as needed
 
         if args_cli.video:
             timestep += 1
-            # Exit the play loop after recording one video
+            # Exit after one video
             if timestep == args_cli.video_length:
                 break
 
-        # time delay for real-time evaluation
+    # sleep for real-time
         sleep_time = dt - (time.time() - start_time)
         if args_cli.real_time and sleep_time > 0:
             time.sleep(sleep_time)
 
-    # close the simulator
+    # close simulator
     env.close()
 
 
 if __name__ == "__main__":
-    # run the main function
+    # run main
     main()
     # close sim app
     simulation_app.close()
