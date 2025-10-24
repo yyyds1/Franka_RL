@@ -58,7 +58,6 @@ import os
 import time
 import torch
 
-from rsl_rl.runners import OnPolicyRunner
 
 from isaaclab.envs import (
     DirectMARLEnv,
@@ -78,28 +77,37 @@ from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import Franka_RL.tasks  # noqa: F401
-
+from Franka_RL.runners import OnPolicyRunnerWithTransformer
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     """Play with RSL-RL agent."""
+    
+    
+    def get_cfg(cfg, key, default=None):
+        """从配置中获取值，兼容字典和对象"""
+        if isinstance(cfg, dict):
+            return cfg.get(key, default)
+        else:
+            return getattr(cfg, key, default)
+    
     # grab task name for checkpoint path
     task_name = args_cli.task.split(":")[-1]
     train_task_name = task_name.replace("-Play", "")
 
     # override configurations with non-hydra CLI arguments
-    agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    agent_cfg = cli_args.update_rsl_rl_cfg_yaml(agent_cfg, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
 
-    # set the environment seed
-    # note: certain randomizations occur in the environment initialization so we set the seed here
-    env_cfg.seed = agent_cfg.seed
+    
+    env_cfg.seed = get_cfg(agent_cfg, "seed")
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
     # specify directory for logging experiments
-    log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
+    log_root_path = os.path.join("logs", "rsl_rl", get_cfg(agent_cfg, "experiment_name"))
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    
     if args_cli.use_pretrained_checkpoint:
         resume_path = get_published_pretrained_checkpoint("rsl_rl", train_task_name)
         if not resume_path:
@@ -108,7 +116,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     elif args_cli.checkpoint:
         resume_path = retrieve_file_path(args_cli.checkpoint)
     else:
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        resume_path = get_checkpoint_path(
+            log_root_path, 
+            get_cfg(agent_cfg, "load_run"), 
+            get_cfg(agent_cfg, "load_checkpoint")
+        )
 
     log_dir = os.path.dirname(resume_path)
 
@@ -132,11 +144,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
     # wrap around environment for rsl-rl
-    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    env = RslRlVecEnvWrapper(env, clip_actions=get_cfg(agent_cfg, "clip_actions"))
 
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+    
     # load previously trained model
-    ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    ppo_runner = OnPolicyRunnerWithTransformer(env, agent_cfg, log_dir=None, device=get_cfg(agent_cfg, "device"))
     ppo_runner.load(resume_path)
 
     # obtain the trained policy for inference
@@ -153,16 +166,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # export policy to onnx/jit
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
-    export_policy_as_jit(policy_nn, ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.pt")
-    export_policy_as_onnx(
-        policy_nn, normalizer=ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.onnx"
-    )
+    #export_policy_as_jit(policy_nn, ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.pt")
+    #export_policy_as_onnx(
+     #   policy_nn, normalizer=ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.onnx"
+    #)
 
     dt = env.unwrapped.step_dt
 
     # reset environment
-    obs, _ = env.get_observations()
-    timestep = 0
+    obs = env.get_observations()
+    timestep = 100
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
@@ -171,7 +184,23 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # agent stepping
             actions = policy(obs)
             # env stepping
-            obs, _, _, _ = env.step(actions)
+            obs, rews, terminated, infos = env.step(actions)
+        # 打印每个环境（机器人）episode结束的原因
+        if hasattr(infos, 'keys') and 'env' in infos:
+            # 兼容RSL-RL风格infos
+            env_infos = infos['env']
+            if 'episode_end_reason' in env_infos:
+                reasons = env_infos['episode_end_reason']
+                for i, reason in enumerate(reasons):
+                    if reason != 0:  # 0通常表示未结束
+                        print(f"[Episode End] Env {i}: reason={reason}")
+        elif isinstance(infos, dict) and 'episode_end_reason' in infos:
+            reasons = infos['episode_end_reason']
+            for i, reason in enumerate(reasons):
+                if reason != 0:
+                    print(f"[Episode End] Env {i}: reason={reason}")
+        # 你可以根据实际环境自定义reason的含义映射
+
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video

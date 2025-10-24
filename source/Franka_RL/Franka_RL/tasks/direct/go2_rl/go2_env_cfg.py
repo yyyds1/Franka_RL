@@ -129,9 +129,9 @@ class Go2EnvCfg(DirectRLEnvCfg):
     obs_scales = {
         "lin_vel": 2.0,
         "ang_vel": 0.25,
-        "dof_pos": 1.0,
+        "dof_pos": 0.25,
         "dof_vel": 0.05,
-        "gravity": 1.0,
+       # "gravity": 1.0,
         "commands": [2.0, 2.0, 0.25],  #  [vx_scale, vy_scale, wz_scale]
     }
 
@@ -140,8 +140,8 @@ class Go2EnvCfg(DirectRLEnvCfg):
         "lin_vel": 0.1,
         "ang_vel": 0.2,
         "dof_pos": 0.01,
-        "dof_vel": 1.5,
-        "gravity": 0.05,
+        "dof_vel": 0.5,
+       # "gravity": 0.05,
     }
 
    
@@ -172,13 +172,13 @@ class Go2EnvCfg(DirectRLEnvCfg):
     }
     
     termination_cfg = {
-        "base_height_min": 0.20,
-        "base_height_max": 0.50,
-        "roll_pitch_max": 0.7,  # ~40度
+        "base_height_min": 0.01,
+        "base_height_max": 3.0,
+        "roll_pitch_max": 1.0,  
     }
     
     # termination 
-    termination_height = 0.3
+    termination_height = 0.15
     
     def __post_init__(self):
         """Post initialization."""

@@ -63,12 +63,30 @@ class MultiHeadedMLP(nn.Module):
         self.trunk: MLP = instantiate(self.config.trunk, num_in=self.feature_size)
 
     def forward(self, input, return_norm_obs=False):
+        # Handle dict/TensorDict input
+        if isinstance(input, dict) or hasattr(input, 'keys'):
+            # Extract tensor - prefer 'policy' key
+            if 'policy' in input.keys():
+                input_tensor = input['policy']
+            else:
+                input_tensor = next(iter(input.values()))
+        else:
+            input_tensor = input
+        
         if return_norm_obs:
             norm_obs = {}
         outs = []
 
         for key, model in self.input_models.items():
-            out = model(input[:, self.obs_slice[key]], return_norm_obs=return_norm_obs)
+            # Handle different tensor dimensions
+            if input_tensor.ndim == 1:
+                sliced = input_tensor[self.obs_slice[key]]
+            elif input_tensor.ndim >= 2:
+                sliced = input_tensor[:, self.obs_slice[key]]
+            else:
+                raise ValueError(f"Unexpected tensor dimension: {input_tensor.ndim}")
+            
+            out = model(sliced, return_norm_obs=return_norm_obs)
             if return_norm_obs:
                 out, norm_obs[f"norm_{model.config.obs_key}"] = (
                     out["outs"],
@@ -77,7 +95,6 @@ class MultiHeadedMLP(nn.Module):
             outs.append(out)
 
         outs = torch.cat(outs, dim=-1)
-
         outs: Tensor = self.trunk(outs)
 
         if return_norm_obs:

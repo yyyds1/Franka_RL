@@ -26,7 +26,7 @@ from rsl_rl.modules import (
 from rsl_rl.utils import store_code_state
 
 from Franka_RL.runners.actor_critic_with_transformer import ActorCriticWithTransformer
-from Franka_RL.utils.storage_utils import RolloutStorageWithDictObs
+from Franka_RL.algorithms.ppo_with_dict_obs import PPOWithDictObs
 
 
 class OnPolicyRunnerWithTransformer:
@@ -109,7 +109,17 @@ class OnPolicyRunnerWithTransformer:
             self.alg_cfg["symmetry_cfg"]["_env"] = env
 
         # initialize algorithm
-        alg_class = eval(self.alg_cfg.pop("class_name"))
+        alg_class_name = self.alg_cfg.pop("class_name")
+        
+        # 如果是 PPO，使用支持字典观测的版本
+        if alg_class_name == "PPO":
+            alg_class = PPOWithDictObs
+        else:
+            alg_class = eval(alg_class_name)
+        
+        # PPOWithDictObs now handles dict observations in its init_storage() override
+        # No need to monkey-patch RolloutStorage
+        
         self.alg: PPO | Distillation = alg_class(
             policy, device=self.device, **self.alg_cfg, multi_gpu_cfg=self.multi_gpu_cfg
         )
@@ -128,13 +138,17 @@ class OnPolicyRunnerWithTransformer:
             self.privileged_obs_normalizer = torch.nn.Identity().to(self.device)  # no normalization
 
         # init storage and model
+        # 构造观测字典，包含所有观测类型的示例张量
+        obs_dict = {"policy": torch.zeros(num_obs, device=self.device)}
+        if self.privileged_obs_type is not None and num_privileged_obs != num_obs:
+            obs_dict[self.privileged_obs_type] = torch.zeros(num_privileged_obs, device=self.device)
+        
         self.alg.init_storage(
             self.training_type,
             self.env.num_envs,
             self.num_steps_per_env,
-            [num_obs],
-            [num_privileged_obs],
-            [self.env.num_actions],
+            obs_dict,  # 字典格式，值为1维张量
+            torch.zeros(self.env.num_actions, device=self.device),  # 1维张量
         )
 
         # Decide whether to disable logging
@@ -182,20 +196,64 @@ class OnPolicyRunnerWithTransformer:
                 self.env.episode_length_buf, high=int(self.env.max_episode_length)
             )
 
+        def extract_tensor_from_tensordict(data, key=None):
+            """递归提取 TensorDict 中的张量
+            
+            Args:
+                data: TensorDict 或普通张量
+                key: 要提取的键（如果有）
+                
+            Returns:
+                普通的 torch.Tensor
+            """
+            # 如果已经是普通张量，直接返回
+            if isinstance(data, torch.Tensor) and not hasattr(data, 'batch_size'):
+                return data
+            
+            # 如果是 TensorDict
+            if hasattr(data, 'batch_size'):
+                # 如果指定了键，尝试提取
+                if key is not None and key in data.keys():
+                    return extract_tensor_from_tensordict(data[key], key=None)
+                
+                # 否则，提取所有值并拼接
+                tensors = []
+                for k, v in data.items():
+                    extracted = extract_tensor_from_tensordict(v, key=None)
+                    if extracted.ndim == 1:
+                        extracted = extracted.unsqueeze(1)
+                    tensors.append(extracted)
+                
+                if len(tensors) == 1:
+                    return tensors[0]
+                else:
+                    return torch.cat(tensors, dim=-1)
+            
+            # 其他情况，尝试直接返回
+            return data
+        
         # start learning
         raw = self.env.get_observations()
-        if isinstance(raw, tuple):
+        
+        # 处理 TensorDict：需要将其转换为普通张量
+        if hasattr(raw, 'batch_size'):  # TensorDict
+            # 使用辅助函数提取 policy observations
+            obs = extract_tensor_from_tensordict(raw, key="policy")
+            extras = {"observations": {"policy": obs}}
+            
+            # 提取 privileged observations
+            if self.privileged_obs_type is not None and self.privileged_obs_type in raw.keys():
+                privileged_obs = extract_tensor_from_tensordict(raw, key=self.privileged_obs_type)
+            else:
+                privileged_obs = obs
+        
+        elif isinstance(raw, tuple):
             obs, extras = raw
         else:
-            # 构造兼容结构
-            if isinstance(raw, dict):
-                obs = raw.get("policy", next(iter(raw.values())))
-                extras = {"observations": raw}
-            else:
-                obs = raw
-                extras = {"observations": {"policy": raw}}
-
-        privileged_obs = extras["observations"].get(self.privileged_obs_type, obs)
+            obs = raw
+            extras = {"observations": {"policy": raw}}
+            privileged_obs = obs
+        
         obs, privileged_obs = obs.to(self.device), privileged_obs.to(self.device)
         self.train_mode()  # switch to train mode (for dropout for example)
 
@@ -231,21 +289,25 @@ class OnPolicyRunnerWithTransformer:
                     # Sample actions
                     actions = self.alg.act(obs, privileged_obs)
                     # Step the environment
-                    obs, rewards, dones, infos = self.env.step(actions.to(self.env.device))
+                    obs_raw, rewards, dones, infos = self.env.step(actions.to(self.env.device))
                     # Move to device
-                    obs, rewards, dones = (obs.to(self.device), rewards.to(self.device), dones.to(self.device))
+                    obs_raw, rewards, dones = (obs_raw.to(self.device), rewards.to(self.device), dones.to(self.device))
 
+                    # 提取观测（处理 TensorDict）
+                    obs = extract_tensor_from_tensordict(obs_raw, key="policy")
+                    
                     # perform normalization
                     obs = self.obs_normalizer(obs)
                     if self.privileged_obs_type is not None:
-                        privileged_obs = self.privileged_obs_normalizer(
-                            infos["observations"][self.privileged_obs_type].to(self.device)
-                        )
+                        privileged_obs_raw = infos["observations"][self.privileged_obs_type].to(self.device)
+                        # 使用辅助函数提取（处理可能的 TensorDict）
+                        privileged_obs_raw = extract_tensor_from_tensordict(privileged_obs_raw)
+                        privileged_obs = self.privileged_obs_normalizer(privileged_obs_raw)
                     else:
                         privileged_obs = obs
 
                     # process the step
-                    self.alg.process_env_step(rewards, dones, infos)
+                    self.alg.process_env_step(obs,rewards, dones, infos)
 
                     # Extract intrinsic rewards (only for logging)
                     intrinsic_rewards = self.alg.intrinsic_rewards if self.alg.rnd else None

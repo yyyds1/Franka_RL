@@ -77,6 +77,15 @@ class ActorCriticWithTransformer(nn.Module):
 
     def reset(self, dones=None):
         pass
+    
+    def update_normalization(self, obs):
+        """Update observation normalization.
+        
+        This method is called by PPO.process_env_step() to update the normalizers.
+        Since we handle normalization at the runner level (not inside the policy),
+        this is a no-op.
+        """
+        pass
 
     def forward(self):
         raise NotImplementedError
@@ -117,8 +126,29 @@ class ActorCriticWithTransformer(nn.Module):
         actions_mean = self.actor(observations)
         return actions_mean
 
-    def evaluate(self, critic_observations, **kwargs):
-        value = self.critic(critic_observations)
+    def evaluate(self, critic_observations, masks=None, hidden_states=None):
+        """
+        Evaluate the value function.
+        
+        Args:
+            critic_observations: Critic observations (can be dict or tensor)
+            masks: Episode masks (for recurrent policies)
+            hidden_states: Hidden states (for recurrent policies)
+        
+        Returns:
+            value: Value estimates [batch_size, 1]
+        """
+        # Handle dict/TensorDict input
+        if isinstance(critic_observations, dict) or hasattr(critic_observations, 'keys'):
+            # Extract tensor from dict - prefer 'policy' key
+            if 'policy' in critic_observations.keys():
+                critic_tensor = critic_observations['policy']
+            else:
+                critic_tensor = next(iter(critic_observations.values()))
+        else:
+            critic_tensor = critic_observations
+        
+        value = self.critic(critic_tensor)
         return value
 
     def load_state_dict(self, state_dict, strict=True):

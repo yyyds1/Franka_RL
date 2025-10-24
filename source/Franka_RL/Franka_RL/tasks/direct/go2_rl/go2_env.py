@@ -63,15 +63,15 @@ class Go2Env(DirectRLEnv):
             "track_lin_vel_xy_exp": self.cfg.lin_vel_reward_scale,
             "track_ang_vel_z_exp": self.cfg.ang_vel_reward_scale,
             "flat_orientation": self.cfg.flat_orientation_reward_scale,
-            "base_height_reward": 1.0,
+            "base_height_reward": self.cfg.base_height_reward_scale if hasattr(self.cfg, 'base_height_reward_scale') else -5.0,
             "feet_air_time": self.cfg.feet_air_time_reward_scale,
             "feet_contact_forces": self.cfg.undersired_contact_reward_scale,
             "dof_torques_l2": self.cfg.joint_torque_reward_scale,
             "dof_acc_l2": self.cfg.joint_acc_reward_scale,
             "action_rate_l2": self.cfg.action_rate_reward_scale,
-            "lin_vel_z_l2": -2.0,
-            "ang_vel_xy_l2": -0.05,
-            "termination_penalty": -200.0,
+            # "lin_vel_z_l2": -2.0,  
+            # "ang_vel_xy_l2": -0.05,  
+            "termination_penalty": -2.0,
         }
         
         self.obs_scales = self.cfg.obs_scales
@@ -380,8 +380,8 @@ class Go2Env(DirectRLEnv):
         base_ang_vel_obs = self.base_ang_vel_local * self.obs_scales["ang_vel"]  # [num_envs, 3]
         obs_list.append(base_ang_vel_obs)  # 3
 
-        projected_grav_obs = self.projected_gravity * self.obs_scales["gravity"]  # [num_envs, 3]
-        obs_list.append(projected_grav_obs)  # 3
+        #projected_grav_obs = self.projected_gravity * self.obs_scales["gravity"]  # [num_envs, 3]
+        #obs_list.append(projected_grav_obs)  # 3
 
         # 2. Commands
         commands_obs = self.commands[:, :3] * torch.tensor(
@@ -467,14 +467,18 @@ class Go2Env(DirectRLEnv):
         action_rate_reward = -torch.sum(torch.square(self.action_rate), dim=1) * self.reward_weights["action_rate_l2"]
 
         # ============================================================
-        # 5. Other penalties
-        # ============================================================
-        lin_vel_z_reward = -torch.square(self.base_lin_vel_local[:, 2]) * self.reward_weights["lin_vel_z_l2"]
-        ang_vel_xy_reward = -torch.sum(torch.square(self.base_ang_vel_local[:, :2]), dim=1) * self.reward_weights["ang_vel_xy_l2"]
+        # 5. 额外奖励/惩罚项（go2_low_base_cfg有而go2_env没有的）
+        # 1) joint_deviation_l1（关节偏差L1）
+        joint_deviation_l1 = -torch.sum(torch.abs(self.dof_pos - self.default_joint_pos.unsqueeze(0)), dim=1) * 0.04  # go2_low_base_cfg: weight=-0.04
+        # 2) hip_deviation（髋关节偏差L1）
+        # 这里只做示例，假设髋关节为前4个dof
+        hip_deviation = -torch.sum(torch.abs(self.dof_pos[:, :4] - self.default_joint_pos.unsqueeze(0)[:, :4]), dim=1) * 0.4  # go2_low_base_cfg: weight=-0.4
 
-        # ============================================================
+        # 注释掉go2_env原有的lin_vel_z_reward和ang_vel_xy_reward（go2_low_base_cfg没有）
+        # lin_vel_z_reward = -torch.square(self.base_lin_vel_local[:, 2]) * self.reward_weights["lin_vel_z_l2"]
+        # ang_vel_xy_reward = -torch.sum(torch.square(self.base_ang_vel_local[:, :2]), dim=1) * self.reward_weights["ang_vel_xy_l2"]
+
         # 6. Termination penalty
-        # ============================================================
         died, _ = self._get_dones()
         termination_reward = died.float() * self.reward_weights["termination_penalty"]
 
@@ -491,8 +495,8 @@ class Go2Env(DirectRLEnv):
             + torques_reward
             + dof_acc_reward
             + action_rate_reward
-            + lin_vel_z_reward
-            + ang_vel_xy_reward
+            + joint_deviation_l1
+            + hip_deviation
             + termination_reward
         )
 
