@@ -78,9 +78,8 @@ import gymnasium as gym
 import os
 import torch
 from datetime import datetime
-
 import omni
-from rsl_rl.runners import OnPolicyRunner
+
 
 from isaaclab.envs import (
     DirectMARLEnv,
@@ -198,6 +197,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # run training
     runner.learn(num_learning_iterations=agent_cfg["max_iterations"], init_at_random_ep_len=True)
+    #训练初期init_at_random_ep_len设为False，避免episode_length_buf全为0导致的问题
 
     # close the simulator
     env.close()

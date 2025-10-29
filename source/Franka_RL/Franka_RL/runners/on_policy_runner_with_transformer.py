@@ -285,22 +285,29 @@ class OnPolicyRunnerWithTransformer:
             start = time.time()
             # Rollout
             with torch.inference_mode():
-                for _ in range(self.num_steps_per_env):
+                for step_idx in range(self.num_steps_per_env):
                     # Sample actions
                     actions = self.alg.act(obs, privileged_obs)
                     # Step the environment
+                    # Environment returns 4 values: obs, rewards, dones, extras
                     obs_raw, rewards, dones, infos = self.env.step(actions.to(self.env.device))
+                    
+                    # Ensure rewards and dones are 1D
+                    if rewards.dim() > 1:
+                        rewards = rewards.squeeze(-1)
+                    if dones.dim() > 1:
+                        dones = dones.squeeze(-1)
+                    
                     # Move to device
                     obs_raw, rewards, dones = (obs_raw.to(self.device), rewards.to(self.device), dones.to(self.device))
 
-                    # 提取观测（处理 TensorDict）
+                    # Extract observations (handle TensorDict)
                     obs = extract_tensor_from_tensordict(obs_raw, key="policy")
                     
                     # perform normalization
                     obs = self.obs_normalizer(obs)
                     if self.privileged_obs_type is not None:
                         privileged_obs_raw = infos["observations"][self.privileged_obs_type].to(self.device)
-                        # 使用辅助函数提取（处理可能的 TensorDict）
                         privileged_obs_raw = extract_tensor_from_tensordict(privileged_obs_raw)
                         privileged_obs = self.privileged_obs_normalizer(privileged_obs_raw)
                     else:
@@ -325,21 +332,26 @@ class OnPolicyRunnerWithTransformer:
                             cur_reward_sum += rewards + intrinsic_rewards
                         else:
                             cur_reward_sum += rewards
+                        
                         # Update episode length
                         cur_episode_length += 1
+                        
                         # Clear data for completed episodes
-                        # -- common
                         new_ids = (dones > 0).nonzero(as_tuple=False)
-                        rewbuffer.extend(cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
-                        lenbuffer.extend(cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
-                        cur_reward_sum[new_ids] = 0
-                        cur_episode_length[new_ids] = 0
-                        # -- intrinsic and extrinsic rewards
-                        if self.alg.rnd:
-                            erewbuffer.extend(cur_ereward_sum[new_ids][:, 0].cpu().numpy().tolist())
-                            irewbuffer.extend(cur_ireward_sum[new_ids][:, 0].cpu().numpy().tolist())
-                            cur_ereward_sum[new_ids] = 0
-                            cur_ireward_sum[new_ids] = 0
+                        
+                        if len(new_ids) > 0:
+                            new_ids_flat = new_ids.squeeze(1) if new_ids.dim() > 1 else new_ids
+                            
+                            rewbuffer.extend(cur_reward_sum[new_ids_flat].cpu().numpy().tolist())
+                            lenbuffer.extend(cur_episode_length[new_ids_flat].cpu().numpy().tolist())
+                            cur_reward_sum[new_ids_flat] = 0
+                            cur_episode_length[new_ids_flat] = 0
+                            
+                            if self.alg.rnd:
+                                erewbuffer.extend(cur_ereward_sum[new_ids_flat].cpu().numpy().tolist())
+                                irewbuffer.extend(cur_ireward_sum[new_ids_flat].cpu().numpy().tolist())
+                                cur_ereward_sum[new_ids_flat] = 0
+                                cur_ireward_sum[new_ids_flat] = 0
 
                 stop = time.time()
                 collection_time = stop - start

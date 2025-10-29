@@ -50,16 +50,46 @@ def main():
     # print info (this is vectorized environment)
     print(f"[INFO]: Gym observation space: {env.observation_space}")
     print(f"[INFO]: Gym action space: {env.action_space}")
+    # 打印reset前的obs
+    print("[DEBUG] obs before reset:")
+    try:
+        obs_before = env.get_obs() if hasattr(env, 'get_obs') else None
+        print(obs_before)
+    except Exception as e:
+        print(f"[DEBUG] Cannot get obs before reset: {e}")
     # reset environment
-    env.reset()
+    obs_after = env.reset()
+    print("[DEBUG] obs after reset:")
+    print(obs_after)
     # simulate environment
     while simulation_app.is_running():
         # run everything in inference mode
         with torch.inference_mode():
             # sample actions from -1 to 1
-            actions = 2 * torch.rand(env.action_space.shape, device=env.unwrapped.device) - 1
+            actions = 1 * (2 * torch.rand(env.action_space.shape, device=env.unwrapped.device) - 1)
             # apply actions
-            env.step(actions)
+            obs, reward, terminated, truncated, info = env.step(actions)
+            
+            
+            """
+            # Print debug info if any episode ends
+            if (hasattr(terminated, '__iter__') and any(terminated)) or (hasattr(truncated, '__iter__') and any(truncated)):
+                print(f"[DEBUG] terminated: {terminated}, truncated: {truncated}")
+                print(f"[DEBUG] info: {info}")
+            # Print episode end reasons if available
+            if hasattr(info, 'keys') and 'env' in info:
+                env_infos = info['env']
+                if 'episode_end_reason' in env_infos:
+                    reasons = env_infos['episode_end_reason']
+                    for i, reason in enumerate(reasons):
+                        if reason != 0:
+                            print(f"[Episode End] Env {i}: reason={reason}")
+            elif isinstance(info, dict) and 'episode_end_reason' in info:
+                reasons = info['episode_end_reason']
+                for i, reason in enumerate(reasons):
+                    if reason != 0:
+                        print(f"[Episode End] Env {i}: reason={reason}")
+            """
 
     # close the simulator
     env.close()

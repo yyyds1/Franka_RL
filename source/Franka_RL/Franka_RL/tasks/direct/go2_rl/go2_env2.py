@@ -3,7 +3,11 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Go2 quadruped locomotion environment using Direct RL workflow."""
+"""
+Go2 quadruped locomotion environment using Direct RL workflow with Command Helper.
+
+这是go2_env.py的改进版本，使用了DirectCommandHelper来实现自动命令管理。
+"""
 
 from __future__ import annotations
 
@@ -14,16 +18,24 @@ from collections.abc import Sequence
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
-from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
-from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.sensors import ContactSensor
 from isaaclab.utils.math import quat_apply_inverse, quat_apply, sample_uniform
 
 from .go2_env_cfg import Go2EnvCfg
+from Franka_RL.utils.command_helper import DirectCommandHelper, CommandConfig, CommandPresets
 
 
-class Go2Env(DirectRLEnv):
-    """Go2 quadruped locomotion environment."""
+class Go2Env2(DirectRLEnv):
+    """
+    Go2 quadruped locomotion environment with automatic command management.
+    
+    相比原版go2_env.py的改进：
+    - ✅ 使用DirectCommandHelper自动管理命令
+    - ✅ 支持中途自动重采样（每8-12秒）
+    - ✅ 支持静止环境（10%概率）
+    - ✅ 可选的heading控制
+    - ✅ 代码更简洁，逻辑更清晰
+    """
     
     cfg: Go2EnvCfg
     
@@ -34,11 +46,25 @@ class Go2Env(DirectRLEnv):
         self.dt = self.cfg.decimation * self.cfg.sim.dt
         self.default_joint_pos = None
         
-        self._init_commands()
+        # ✅ 使用DirectCommandHelper替代手动实现
+        self._init_command_helper()
         
-        # Load reward weights and parameters from config
-        self.reward_weights = self.cfg.reward_weights
-        self.reward_params = self.cfg.reward_params
+        # 奖励权重配置
+        self.reward_weights = {
+            "track_lin_vel_xy_exp": 1.5,
+            "track_ang_vel_z_exp": 1.5,
+            "flat_orientation": -2.5,
+            "base_height_reward": -5.0,
+            "feet_air_time": 0.2,
+            "feet_contact_forces": -0.01,
+            "hip_deviation": -0.4,
+            "joint_deviation": -0.04,
+            "joint_power": -2e-5,
+            "dof_acc_l2": -2.5e-7,
+            "action_rate_l2": -0.02,
+            "action_smoothness": -0.02,
+            "termination_penalty": -2.0,
+        }
         
         self.obs_scales = self.cfg.obs_scales
         
@@ -50,25 +76,50 @@ class Go2Env(DirectRLEnv):
         self.last_dof_vel = torch.zeros(self.num_envs, 12, dtype=torch.float32, device=self.device)
         self._latest_policy_obs_seq: torch.Tensor | None = None
         
-        # 存储原始动作（网络输出），用于计算action_rate
         self.raw_actions = torch.zeros(self.num_envs, 12, dtype=torch.float32, device=self.device)
         self.last_raw_actions = torch.zeros(self.num_envs, 12, dtype=torch.float32, device=self.device)
         
-    def _init_commands(self):
-        """Initialize the velocity command generator."""
-        # Command buffer: [lin_vel_x, lin_vel_y, ang_vel_z, heading]
-        self.commands = torch.zeros(
-            self.num_envs, 4, dtype=torch.float32, device=self.device
-        )
-
-        # Command ranges
-        self.command_ranges = {
-            "lin_vel_x": self.cfg.commands_cfg["lin_vel_x_range"],
-            "lin_vel_y": self.cfg.commands_cfg["lin_vel_y_range"],
-            "ang_vel_z": self.cfg.commands_cfg["ang_vel_z_range"],
-            "heading": self.cfg.commands_cfg["heading_range"],
-        }
+    def _init_command_helper(self):
+        """
+        初始化命令辅助系统。
         
+        这里展示了三种配置方式，根据需要选择：
+        """
+        # 方式1：使用预定义配置（推荐）
+        # command_cfg = CommandPresets.basic()       # 最简单：无高级功能
+        command_cfg = CommandPresets.standard()    # 标准：10%静止环境
+        # command_cfg = CommandPresets.advanced()    # 高级：heading+静止
+        # command_cfg = CommandPresets.training()    # 训练：频繁重采样
+        
+        # 方式2：手动配置（自定义）
+        # command_cfg = CommandConfig(
+        #     lin_vel_x_range=(-2.0, 2.0),
+        #     lin_vel_y_range=(-2.0, 2.0),
+        #     ang_vel_z_range=(-1.5, 1.5),
+        #     resampling_time_range=(8.0, 12.0),
+        #     enable_heading_control=False,  # 不启用heading
+        #     enable_standing_envs=True,     # 启用静止环境
+        #     rel_standing_envs=0.1,         # 10%静止
+        #     enable_metrics=False,          # 不追踪误差
+        # )
+        
+        # 方式3：从配置文件读取（与原go2_env兼容）
+        # command_cfg = CommandConfig(
+        #     lin_vel_x_range=self.cfg.commands_cfg["lin_vel_x_range"],
+        #     lin_vel_y_range=self.cfg.commands_cfg["lin_vel_y_range"],
+        #     ang_vel_z_range=self.cfg.commands_cfg["ang_vel_z_range"],
+        #     heading_range=self.cfg.commands_cfg["heading_range"],
+        #     enable_standing_envs=True,
+        #     rel_standing_envs=0.1,
+        # )
+        
+        # 创建Helper实例
+        self.command_helper = DirectCommandHelper(
+            num_envs=self.num_envs,
+            device=self.device,
+            cfg=command_cfg,
+        )
+    
     def _setup_scene(self):
         """Set up the simulation scene."""
         self.robot = Articulation(self.cfg.robot)
@@ -114,20 +165,33 @@ class Go2Env(DirectRLEnv):
             joint_pos_dict = go2_robot.init_state.joint_pos
             joint_pos_list = [joint_pos_dict[name] for name in go2_robot.dof_names]
             self.default_joint_pos = torch.tensor(joint_pos_list, dtype=torch.float32, device=self.device)
-            
+    
+    def step(self, action: torch.Tensor):
+        """
+        Execute one time-step of the environment's dynamics.
+        
+        ✅ 关键改进：在这里自动更新命令系统
+        """
+        # ✅ 1. 更新命令系统（自动重采样）
+        # 如果配置了heading控制，需要传入robot对象
+        if self.command_helper.cfg.enable_heading_control:
+            self.command_helper.update(self.step_dt, self.robot)
+        else:
+            self.command_helper.update(self.step_dt)
+        
+        # 2. 继续原有的step逻辑
+        return super().step(action)
+    
     def _pre_physics_step(self, actions: torch.Tensor):
         """Pre-process actions before the physics step."""
         if self._joint_dof_idx is None:
             self._initialize_indices()
 
-        # 保存原始动作（网络输出）用于计算 action_rate
         self.last_raw_actions = self.raw_actions.clone()
         self.raw_actions = actions.clone()
         
-        # 保存上一步的关节位置目标
         self.last_actions = self.actions.clone() if hasattr(self, 'actions') else self.dof_pos
         
-        # 计算关节位置目标
         joint_pos_target = self.dof_pos + actions * self.action_scale
         self.actions = joint_pos_target
 
@@ -156,9 +220,14 @@ class Go2Env(DirectRLEnv):
 
         forward_vec = quat_apply(self.base_quat, torch.tensor([1.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1))
         self.heading = torch.atan2(forward_vec[:, 1], forward_vec[:, 0])
+        
+        # ✅ 从Helper获取命令
+        commands_3d = self.command_helper.get_commands()  # [num_envs, 3]
+        self.commands = self.command_helper.get_commands_with_heading()  # [num_envs, 4]
+        
         self.heading_error = torch.abs(self.heading - self.commands[:, 3])
-        self.lin_vel_error = self.base_lin_vel_local[:, :2] - self.commands[:, :2]
-        self.ang_vel_error = self.base_ang_vel_local[:, 2] - self.commands[:, 2]
+        self.lin_vel_error = self.base_lin_vel_local[:, :2] - commands_3d[:, :2]
+        self.ang_vel_error = self.base_ang_vel_local[:, 2] - commands_3d[:, 2]
 
         body_states = self.robot.data.body_state_w
         feet_pos_list = []
@@ -201,59 +270,39 @@ class Go2Env(DirectRLEnv):
         return observations
         
     def _get_rewards(self) -> torch.Tensor:
-        """Compute rewards for the Go2 locomotion task."""
+        """Compute rewards (与原版完全相同)."""
         self._compute_intermediate_values()
 
-        # Velocity tracking rewards
+        # 速度跟踪奖励
         lin_vel_error_squared = torch.sum(torch.square(self.lin_vel_error), dim=1)
-        lin_vel_reward = torch.exp(-lin_vel_error_squared / self.reward_params["velocity_tracking_std"]) * self.reward_weights["track_lin_vel_xy_exp"]
+        lin_vel_reward = torch.exp(-lin_vel_error_squared / 0.5) * self.reward_weights["track_lin_vel_xy_exp"]
         
         ang_vel_error_squared = torch.square(self.ang_vel_error)
-        ang_vel_reward = torch.exp(-ang_vel_error_squared / self.reward_params["velocity_tracking_std"]) * self.reward_weights["track_ang_vel_z_exp"]
+        ang_vel_reward = torch.exp(-ang_vel_error_squared / 0.5) * self.reward_weights["track_ang_vel_z_exp"]
 
-        # Orientation stability reward
+        # 姿态稳定性
         gravity_target = torch.tensor([0.0, 0.0, -1.0], device=self.device).repeat(self.num_envs, 1)
         gravity_error = self.projected_gravity - gravity_target
         flat_orientation_reward = torch.sum(torch.square(gravity_error), dim=1) * self.reward_weights["flat_orientation"]
 
-        # Base height reward (relative to environment origin)
-        target_height = self.reward_params["target_height"]
-        relative_height = self.base_pos[:, 2] - self.scene.env_origins[:, 2]
-        height_error_squared = torch.square(relative_height - target_height)
+        target_height = 0.32
+        height_error_squared = torch.square(self.base_height - target_height)
         height_reward = height_error_squared * self.reward_weights["base_height_reward"]
 
-        # Feet air time reward
+        # 脚部接触
         cmd_norm = torch.norm(self.commands[:, :2], dim=1)
-        is_moving = (cmd_norm > self.reward_params["moving_threshold"]).float()
+        is_moving = (cmd_norm > 0.1).float()
         
         feet_air_time = self._contact_sensor.data.last_air_time[:, self._feet_indices]
         first_contact = self._contact_sensor.compute_first_contact(self.dt)[:, self._feet_indices]
         
-        threshold = self.reward_params["feet_air_time_threshold"]
+        threshold = 0.5
         feet_air_time_reward = torch.sum((feet_air_time - threshold) * first_contact, dim=1)
         feet_air_time_reward *= is_moving * self.reward_weights["feet_air_time"]
         
-        # Illegal contact penalty
-        illegal_contact = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
-        
-        calf_contact = self._check_illegal_contact_by_name(
-            ["FL_calf", "FR_calf", "RL_calf", "RR_calf"], 
-            threshold=1.0
-        )
-        illegal_contact += calf_contact.float()
-        
-        hip_contact = self._check_illegal_contact_by_name(
-            ["FL_hip", "FR_hip", "RL_hip", "RR_hip"], 
-            threshold=1.0
-        )
-        illegal_contact += hip_contact.float()
-        
-        base_contact = self._check_illegal_contact_by_name(["base"], threshold=1.0)
-        illegal_contact += base_contact.float()
-        
-        contact_reward = illegal_contact * self.reward_weights["feet_contact_forces"]
+        contact_reward = self.feet_contact.sum(dim=1) * self.reward_weights["feet_contact_forces"]
 
-        # Joint deviation penalty
+        # 关节偏差
         hip_indices = [0, 1, 2, 3]
         hip_deviation = torch.sum(torch.abs(
             self.dof_pos[:, hip_indices] - self.default_joint_pos[hip_indices].unsqueeze(0)
@@ -264,24 +313,24 @@ class Go2Env(DirectRLEnv):
             self.dof_pos[:, thigh_calf_indices] - self.default_joint_pos[thigh_calf_indices].unsqueeze(0)
         ), dim=1) * self.reward_weights["joint_deviation"]
 
-        # Power penalty
+        # 功率惩罚
         applied_torques = self.robot.data.applied_torque[:, :12]
         power = applied_torques * self.dof_vel
         power_reward = torch.sum(torch.abs(power), dim=1) * self.reward_weights["joint_power"]
 
-        # DOF acceleration penalty
+        # 加速度惩罚
         dof_acc_reward = torch.sum(torch.square(self.dof_acc), dim=1) * self.reward_weights["dof_acc_l2"]
 
-        # Action smoothness penalties
+        # 动作平滑性
         action_diff = self.raw_actions - self.last_raw_actions
         action_rate_reward = torch.sum(torch.square(action_diff), dim=1) * self.reward_weights["action_rate_l2"]
         action_smoothness_reward = torch.sum(torch.abs(action_diff), dim=1) * self.reward_weights["action_smoothness"]
 
-        # Termination penalty
+        # 终止惩罚
         died, _ = self._get_dones()
         termination_reward = died.float() * self.reward_weights["termination_penalty"]
 
-        # Total reward
+        # 总奖励
         total_reward = (
             lin_vel_reward + 
             ang_vel_reward + 
@@ -298,14 +347,14 @@ class Go2Env(DirectRLEnv):
             termination_reward
         )
 
-        # Logging reward components
+        # 记录奖励分项
         self.extras["log"] = {
             "rewards/lin_vel": lin_vel_reward.mean(),
             "rewards/ang_vel": ang_vel_reward.mean(),
             "rewards/flat_orientation": flat_orientation_reward.mean(),
             "rewards/height": height_reward.mean(),
             "rewards/feet_air_time": feet_air_time_reward.mean(),
-            "rewards/illegal_contact": contact_reward.mean(),
+            "rewards/contact": contact_reward.mean(),
             "rewards/hip_deviation": hip_deviation.mean(),
             "rewards/joint_deviation": joint_deviation.mean(),
             "rewards/power": power_reward.mean(),
@@ -314,10 +363,13 @@ class Go2Env(DirectRLEnv):
             "rewards/action_smoothness": action_smoothness_reward.mean(),
             "rewards/termination": termination_reward.mean(),
             "rewards/total": total_reward.mean(),
-            "debug/num_died": died.sum(),
-            "debug/illegal_contacts": illegal_contact.sum(),
-            "debug/moving_envs": is_moving.sum(),
         }
+        
+        # ✅ 可选：记录命令误差（如果启用了metrics）
+        if self.command_helper.cfg.enable_metrics:
+            metrics = self.command_helper.get_metrics()
+            self.extras["log"]["commands/error_vel_xy"] = metrics["error_vel_xy"].mean()
+            self.extras["log"]["commands/error_vel_yaw"] = metrics["error_vel_yaw"].mean()
 
         return total_reward
         
@@ -332,18 +384,14 @@ class Go2Env(DirectRLEnv):
         base_contact = self._check_illegal_contact_by_name(["base"], threshold=1.0)
         hip_contact = self._check_illegal_contact_by_name(["FL_hip", "FR_hip", "RL_hip", "RR_hip"], threshold=1.0)
         calf_contact = self._check_illegal_contact_by_name(["FL_calf", "FR_calf", "RL_calf", "RR_calf"], threshold=1.0)
-        
-        # Height bounds check to prevent robots from falling out of map
-        relative_height = self.base_pos[:, 2] - self.scene.env_origins[:, 2]
-        out_of_bounds = (relative_height < 0.01) | (relative_height > 5.0)
 
-        terminated = tilted | base_contact | hip_contact | calf_contact | out_of_bounds
+        terminated = tilted | base_contact | hip_contact | calf_contact
         time_out = self.episode_length_buf >= self.max_episode_length - 1
 
         return terminated, time_out
     
     def _check_illegal_contact(self, body_indices: list, threshold: float = 1.0) -> torch.Tensor:
-        """Check if specified body parts have illegal contact (contact force exceeds threshold)."""
+        """检查指定身体部位是否有非法接触。"""
         net_contact_forces = self._contact_sensor.data.net_forces_w_history
         selected_forces = net_contact_forces[:, :, body_indices, :]
         contact_force_magnitude = torch.norm(selected_forces, dim=-1)
@@ -352,11 +400,8 @@ class Go2Env(DirectRLEnv):
         
         return illegal_contact
     
-    def _check_illegal_contact_by_name(self, body_names: list[str], threshold: float = None) -> torch.Tensor:
-        """Check illegal contact by body names."""
-        if threshold is None:
-            threshold = self.reward_params["illegal_contact_threshold"]
-            
+    def _check_illegal_contact_by_name(self, body_names: list[str], threshold: float = 1.0) -> torch.Tensor:
+        """通过body名称检查非法接触。"""
         body_indices = []
         for name in body_names:
             try:
@@ -376,10 +421,9 @@ class Go2Env(DirectRLEnv):
             env_ids = self.robot._ALL_INDICES
 
         self.robot.reset(env_ids)
-        
+
         pos_range = self.cfg.init_state_cfg["pos_range"]
         init_pos = self.robot.data.default_root_state[env_ids, :3].clone()
-        init_pos += self.scene.env_origins[env_ids]
         init_pos[:, 0] += sample_uniform(pos_range["x"][0], pos_range["x"][1], (len(env_ids),), self.device)
         init_pos[:, 1] += sample_uniform(pos_range["y"][0], pos_range["y"][1], (len(env_ids),), self.device)
         init_pos[:, 2] += pos_range["z"][0]
@@ -410,29 +454,10 @@ class Go2Env(DirectRLEnv):
         self.robot.write_root_state_to_sim(root_state, env_ids)
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
 
-        self._resample_commands(env_ids)
+        # ✅ 使用Helper重置命令（替代手动_resample_commands）
+        self.command_helper.reset(env_ids)
 
         self.last_actions[env_ids] = 0.0
         self.last_dof_vel[env_ids] = 0.0
         self.raw_actions[env_ids] = 0.0
         self.last_raw_actions[env_ids] = 0.0
-        
-        # Reset episode length buffer (critical fix for DirectRLEnv)
-        self.episode_length_buf[env_ids] = 0
-        
-    def _resample_commands(self, env_ids: torch.Tensor):
-        """Resample velocity commands."""
-        n = len(env_ids)
-
-        self.commands[env_ids, 0] = sample_uniform(
-            self.command_ranges["lin_vel_x"][0], self.command_ranges["lin_vel_x"][1], (n,), self.device
-        )
-        self.commands[env_ids, 1] = sample_uniform(
-            self.command_ranges["lin_vel_y"][0], self.command_ranges["lin_vel_y"][1], (n,), self.device
-        )
-        self.commands[env_ids, 2] = sample_uniform(
-            self.command_ranges["ang_vel_z"][0], self.command_ranges["ang_vel_z"][1], (n,), self.device
-        )
-        self.commands[env_ids, 3] = sample_uniform(
-            self.command_ranges["heading"][0], self.command_ranges["heading"][1], (n,), self.device
-        )

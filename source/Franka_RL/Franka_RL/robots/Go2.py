@@ -15,6 +15,7 @@ class UnitreeGo2(QuadrupedRobot, ABC):
         
         # Basic robot information
         self._usd_path = f"{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/Go2/go2.usd"
+        
         self.name = "unitree_go2"
         
         # Leg configuration
@@ -28,17 +29,13 @@ class UnitreeGo2(QuadrupedRobot, ABC):
             "RL_hip", "RL_thigh", "RL_calf", "RL_foot", # Rear Left leg
             "RR_hip", "RR_thigh", "RR_calf", "RR_foot", # Rear Right leg
         ]
-        
+     
         # DOF names (12 DOF total - 3 per leg)
         self.dof_names = [
             # Front Left leg
-            "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
-            # Front Right leg
-            "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
-            # Rear Left leg
-            "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
-            # Rear Right leg
-            "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
+            "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
+            "FL_thigh_joint","FR_thigh_joint", "RL_thigh_joint","RR_thigh_joint", 
+            "FL_calf_joint","FR_calf_joint", "RL_calf_joint","RR_calf_joint",
         ]
         
         # Specific body part names
@@ -62,8 +59,8 @@ class UnitreeGo2(QuadrupedRobot, ABC):
                 "RL_hip_joint": 0.1,
                 "RR_hip_joint": -0.1,
                 # Thigh joints (hip flexion/extension)
-                "FL_thigh_joint": 0.8,
-                "FR_thigh_joint": 0.8,
+                "FL_thigh_joint": 0.8,  
+                "FR_thigh_joint": 0.8,  
                 "RL_thigh_joint": 1.0,
                 "RR_thigh_joint": 1.0,
                 # Calf joints (knee flexion/extension)
@@ -87,8 +84,8 @@ class UnitreeGo2(QuadrupedRobot, ABC):
             effort_limit=23.5,
             saturation_effort=23.5,
             velocity_limit=30.0,
-            stiffness=25.0,
-            damping=0.5,
+            stiffness=40.0,
+            damping=1.0,
             friction=0.0,
             ),
         }
@@ -115,7 +112,7 @@ class UnitreeGo2(QuadrupedRobot, ABC):
             [-1.047, 4.188],   # RR_thigh_joint: -60° to 240°
             [-2.697, -0.916],  # RR_calf_joint: -154.5° to -52.5°
         ]
-        """
+        
         # Weight indices for reward computation and analysis
         self.weight_idx = {
             # Body indices
@@ -127,9 +124,9 @@ class UnitreeGo2(QuadrupedRobot, ABC):
             "calf_bodies": [3, 7, 11, 15],           # Calf bodies
             
             # Joint indices
-            "hip_joints": [0, 3, 6, 9],              # Hip joint indices
-            "thigh_joints": [1, 4, 7, 10],           # Thigh joint indices  
-            "calf_joints": [2, 5, 8, 11],            # Calf joint indices
+            "hip_joints": [0, 1, 2, 3],              # Hip joint indices
+            "thigh_joints": [4, 5, 6, 7],           # Thigh joint indices  
+            "calf_joints": [8, 9, 10, 11],            # Calf joint indices
             
             # Leg-wise indices
             "FL_leg": [1, 2, 3, 4],                  # Front Left leg bodies
@@ -137,6 +134,7 @@ class UnitreeGo2(QuadrupedRobot, ABC):
             "RL_leg": [9, 10, 11, 12],               # Rear Left leg bodies
             "RR_leg": [13, 14, 15, 16],              # Rear Right leg bodies
         }
+        """
 
     def get_leg_joints(self, leg_name: str):
         """Get joint names for a specific leg."""

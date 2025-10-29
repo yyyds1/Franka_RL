@@ -12,6 +12,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import ContactSensorCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
@@ -23,7 +24,7 @@ from Franka_RL.robots import QuadrupedRobotFactory
 ##
 # Pre-defined configs
 ##
-from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG  # isort: skip
+from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG, FLAT_TERRAINS_CFG  # isort: skip
 
 
 
@@ -64,15 +65,16 @@ class Go2EnvCfg(DirectRLEnvCfg):
     
     observation_space = 45
     action_space = 12
-    state_space = 0
-    
+    state_space = 45
+    future_frame = 5
+
     # env
     episode_length_s = 20.0
     decimation = 4
     action_scale = 0.25  
     num_envs = 4096
-    env_spacing = 2.5
-    
+    env_spacing = 5.0
+
     # simulation
     sim: SimulationCfg = SimulationCfg(
         dt=1 / 200,
@@ -86,11 +88,12 @@ class Go2EnvCfg(DirectRLEnvCfg):
         ),
     )
     
+
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
         terrain_type="generator",
-        terrain_generator=ROUGH_TERRAINS_CFG,
-        max_init_terrain_level=5,
+        terrain_generator=FLAT_TERRAINS_CFG,  
+        max_init_terrain_level=0,  
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
@@ -115,15 +118,14 @@ class Go2EnvCfg(DirectRLEnvCfg):
   
     robot: ArticulationCfg = "Franka_RL.tasks.direct.go2_rl.go2_env_cfg:get_robot_cfg"
     
-    # reward scales
-    lin_vel_reward_scale = 1.0
-    ang_vel_reward_scale = 0.5
-    joint_torque_reward_scale = -0.0002
-    joint_acc_reward_scale = -2.5e-7
-    action_rate_reward_scale = -0.01
-    feet_air_time_reward_scale = 0.5
-    undersired_contact_reward_scale = -1.0
-    flat_orientation_reward_scale = -5.0
+    # Contact sensor for detecting illegal contacts
+    contact_sensor: ContactSensorCfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/.*",
+        history_length=3,
+        track_air_time=True,
+        debug_vis=False,
+    )
+    
 
     # normalization
     obs_scales = {
@@ -155,8 +157,8 @@ class Go2EnvCfg(DirectRLEnvCfg):
     
     init_state_cfg = {
         "pos_range": {
-            "x": [-0.5, 0.5],
-            "y": [-0.5, 0.5],
+            "x": [-2.5, 2.5],  # 扩大到 ±2.5米（env_spacing的一半）
+            "y": [-2.5, 2.5],  # 扩大到 ±2.5米，保持在各自的格子内
             "z": [0.0, 0.0],
         },
         "rot_range": {
@@ -172,13 +174,48 @@ class Go2EnvCfg(DirectRLEnvCfg):
     }
     
     termination_cfg = {
-        "base_height_min": 0.01,
+        "base_height_min": 0.1,
         "base_height_max": 3.0,
         "roll_pitch_max": 1.0,  
     }
     
     # termination 
     termination_height = 0.15
+    
+    # Reward weights configuration
+    reward_weights = {
+        # Velocity tracking rewards
+        "track_lin_vel_xy_exp": 1.5,      # Linear velocity tracking (XY plane)
+        "track_ang_vel_z_exp": 1.5,       # Angular velocity tracking (Z axis)
+        
+        # Posture stability penalties
+        "flat_orientation": -2.5,          # Penalize non-flat orientation (L2 norm)
+        "base_height_reward": -5.0,        # Penalize deviation from target height
+        
+        # Feet contact rewards
+        "feet_air_time": 0.2,              # Reward sufficient air time during motion
+        "feet_contact_forces": -0.1,       # Penalize illegal contacts (calf, hip, base) - 增加10倍
+        
+        # Joint and action smoothness
+        "hip_deviation": -0.4,             # Penalize hip joint deviation
+        "joint_deviation": -0.04,          # Penalize other joint deviations
+        "joint_power": -2e-5,              # Penalize power consumption
+        "dof_acc_l2": -2.5e-7,            # Penalize joint accelerations
+        "action_rate_l2": -0.02,          # Penalize action rate (L2)
+        "action_smoothness": -0.02,        # Penalize action smoothness (L1)
+        
+        # Termination penalty
+        "termination_penalty": -20.0,      # Reduced from -100 to allow learning through other rewards
+    }
+    
+    # Reward computation parameters
+    reward_params = {
+        "target_height": 0.32,             # Target base height (meters)
+        "feet_air_time_threshold": 0.5,    # Minimum air time threshold (seconds)
+        "moving_threshold": 0.1,           # Velocity threshold to consider "moving"
+        "velocity_tracking_std": 0.5,      # Standard deviation for velocity tracking exp reward
+        "illegal_contact_threshold": 1.0,  # Force threshold for illegal contacts (N)
+    }
     
     def __post_init__(self):
         """Post initialization."""

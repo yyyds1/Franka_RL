@@ -32,6 +32,8 @@ policy:
   class_name: ActorCriticWithTransformer
   num_obs: ${..num_obs}
   num_action: ${..num_action}
+  init_noise_std: 1.0  # Initial action noise standard deviation (探索噪声)
+  noise_std_type: scalar  # Type of noise std: "scalar" or "log"
   actor_config:
     _target_: Franka_RL.models.transformer.Transformer
     _recursive_: False
