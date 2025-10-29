@@ -20,6 +20,7 @@ from isaaclab.sensors import ContactSensor
 from isaaclab.utils.math import quat_apply_inverse, quat_apply, sample_uniform
 
 from .go2_env_cfg import Go2EnvCfg
+from Franka_RL.utils.command_helper import DirectCommandHelper, CommandConfig
 
 
 class Go2Env(DirectRLEnv):
@@ -34,6 +35,7 @@ class Go2Env(DirectRLEnv):
         self.dt = self.cfg.decimation * self.cfg.sim.dt
         self.default_joint_pos = None
         
+        # Initialize command system (use DirectCommandHelper for automatic management)
         self._init_commands()
         
         # Load reward weights and parameters from config
@@ -55,19 +57,31 @@ class Go2Env(DirectRLEnv):
         self.last_raw_actions = torch.zeros(self.num_envs, 12, dtype=torch.float32, device=self.device)
         
     def _init_commands(self):
-        """Initialize the velocity command generator."""
-        # Command buffer: [lin_vel_x, lin_vel_y, ang_vel_z, heading]
+        """Initialize the velocity command system using DirectCommandHelper."""
+        # Create CommandConfig from environment configuration
+        command_cfg = CommandConfig(
+            lin_vel_x_range=tuple(self.cfg.commands_cfg["lin_vel_x_range"]),
+            lin_vel_y_range=tuple(self.cfg.commands_cfg["lin_vel_y_range"]),
+            ang_vel_z_range=tuple(self.cfg.commands_cfg["ang_vel_z_range"]),
+            heading_range=tuple(self.cfg.commands_cfg["heading_range"]),
+            resampling_time_range=tuple(self.cfg.commands_cfg["resampling_time_range"]),
+            enable_heading_control=self.cfg.commands_cfg["enable_heading_control"],
+            enable_standing_envs=self.cfg.commands_cfg["enable_standing_envs"],
+            rel_standing_envs=self.cfg.commands_cfg["rel_standing_envs"],
+            enable_metrics=self.cfg.commands_cfg["enable_metrics"],
+        )
+        
+        # Create DirectCommandHelper instance
+        self.command_helper = DirectCommandHelper(
+            num_envs=self.num_envs,
+            device=self.device,
+            cfg=command_cfg,
+        )
+        
+        # Compatibility: maintain commands buffer for existing code
         self.commands = torch.zeros(
             self.num_envs, 4, dtype=torch.float32, device=self.device
         )
-
-        # Command ranges
-        self.command_ranges = {
-            "lin_vel_x": self.cfg.commands_cfg["lin_vel_x_range"],
-            "lin_vel_y": self.cfg.commands_cfg["lin_vel_y_range"],
-            "ang_vel_z": self.cfg.commands_cfg["ang_vel_z_range"],
-            "heading": self.cfg.commands_cfg["heading_range"],
-        }
         
     def _setup_scene(self):
         """Set up the simulation scene."""
@@ -157,6 +171,8 @@ class Go2Env(DirectRLEnv):
         forward_vec = quat_apply(self.base_quat, torch.tensor([1.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1))
         self.heading = torch.atan2(forward_vec[:, 1], forward_vec[:, 0])
         self.heading_error = torch.abs(self.heading - self.commands[:, 3])
+        
+        # Get velocity commands from helper (updated in step())
         self.lin_vel_error = self.base_lin_vel_local[:, :2] - self.commands[:, :2]
         self.ang_vel_error = self.base_ang_vel_local[:, 2] - self.commands[:, 2]
 
@@ -318,6 +334,18 @@ class Go2Env(DirectRLEnv):
             "debug/illegal_contacts": illegal_contact.sum(),
             "debug/moving_envs": is_moving.sum(),
         }
+        
+        # Add command system metrics if enabled
+        if self.cfg.commands_cfg["enable_metrics"]:
+            metrics = self.command_helper.get_metrics()
+            if metrics:
+                self.extras["log"]["commands/error_vel_xy"] = metrics["error_vel_xy"].mean()
+                self.extras["log"]["commands/error_vel_yaw"] = metrics["error_vel_yaw"].mean()
+        
+        # Log standing environments ratio
+        if self.cfg.commands_cfg["enable_standing_envs"]:
+            standing_ratio = self.command_helper.is_standing_env.float().mean()
+            self.extras["log"]["commands/standing_ratio"] = standing_ratio
 
         return total_reward
         
@@ -410,7 +438,9 @@ class Go2Env(DirectRLEnv):
         self.robot.write_root_state_to_sim(root_state, env_ids)
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
 
-        self._resample_commands(env_ids)
+        # Reset commands using DirectCommandHelper
+        self.command_helper.reset(env_ids)
+        self.commands = self.command_helper.get_commands_with_heading()
 
         self.last_actions[env_ids] = 0.0
         self.last_dof_vel[env_ids] = 0.0
@@ -419,20 +449,3 @@ class Go2Env(DirectRLEnv):
         
         # Reset episode length buffer (critical fix for DirectRLEnv)
         self.episode_length_buf[env_ids] = 0
-        
-    def _resample_commands(self, env_ids: torch.Tensor):
-        """Resample velocity commands."""
-        n = len(env_ids)
-
-        self.commands[env_ids, 0] = sample_uniform(
-            self.command_ranges["lin_vel_x"][0], self.command_ranges["lin_vel_x"][1], (n,), self.device
-        )
-        self.commands[env_ids, 1] = sample_uniform(
-            self.command_ranges["lin_vel_y"][0], self.command_ranges["lin_vel_y"][1], (n,), self.device
-        )
-        self.commands[env_ids, 2] = sample_uniform(
-            self.command_ranges["ang_vel_z"][0], self.command_ranges["ang_vel_z"][1], (n,), self.device
-        )
-        self.commands[env_ids, 3] = sample_uniform(
-            self.command_ranges["heading"][0], self.command_ranges["heading"][1], (n,), self.device
-        )

@@ -147,11 +147,19 @@ class Go2EnvCfg(DirectRLEnvCfg):
     }
 
    
+    # Command configuration (compatible with DirectCommandHelper)
     commands_cfg = {
-        "lin_vel_x_range": [-1.0, 1.0],
-        "lin_vel_y_range": [-1.0, 1.0],
+        "lin_vel_x_range": [-2.0, 2.0],
+        "lin_vel_y_range": [-2.0, 2.0],
         "ang_vel_z_range": [-1.0, 1.0],
         "heading_range": [-3.14, 3.14],
+        
+        # Advanced command features (for DirectCommandHelper)
+        "resampling_time_range": [8.0, 12.0],   # Resample commands every 8-12 seconds
+        "enable_heading_control": False,         # Disable heading control for basic locomotion
+        "enable_standing_envs": True,            # Enable standing environments
+        "rel_standing_envs": 0.1,                # 10% of environments will stand still
+        "enable_metrics": False,                 # Disable metrics tracking for training
     }
     
     
