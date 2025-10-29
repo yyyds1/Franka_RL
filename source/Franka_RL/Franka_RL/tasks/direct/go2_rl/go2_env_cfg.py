@@ -189,3 +189,4 @@ class Go2EnvCfg(DirectRLEnvCfg):
         
        
         self.scene.robot = self.robot
+

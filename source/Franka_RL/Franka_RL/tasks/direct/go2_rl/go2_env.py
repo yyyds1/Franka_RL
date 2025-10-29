@@ -466,14 +466,12 @@ class Go2Env(DirectRLEnv):
         # Action rate L2 (smoothness)
         action_rate_reward = -torch.sum(torch.square(self.action_rate), dim=1) * self.reward_weights["action_rate_l2"]
 
-        # ============================================================
-        # 5. 额外奖励/惩罚项
         #  joint_deviation_l1
         joint_deviation_l1 = -torch.sum(torch.abs(self.dof_pos - self.default_joint_pos.unsqueeze(0)), dim=1) * 0.04  # go2_low_base_cfg: weight=-0.04
         # hip_deviation
         hip_deviation = -torch.sum(torch.abs(self.dof_pos[:, [0, 3, 6, 9]] - self.default_joint_pos.unsqueeze(0)[:, :4]), dim=1) * 0.4  # go2_low_base_cfg: weight=-0.4
 
-        # 注释掉go2_env原有的lin_vel_z_reward和ang_vel_xy_reward（go2_low_base_cfg没有）
+        
         # lin_vel_z_reward = -torch.square(self.base_lin_vel_local[:, 2]) * self.reward_weights["lin_vel_z_l2"]
         # ang_vel_xy_reward = -torch.sum(torch.square(self.base_ang_vel_local[:, :2]), dim=1) * self.reward_weights["ang_vel_xy_l2"]
 
