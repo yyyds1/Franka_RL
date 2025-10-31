@@ -21,13 +21,18 @@ class UnitreeGo2(QuadrupedRobot, ABC):
         # Leg configuration
         self.leg_names = ["FL", "FR", "RL", "RR"]  # Front Left, Front Right, Rear Left, Rear Right
         
-        # Body part names (15 bodies total)
+        # Body part names (19 bodies total - matching exact USD structure)
+        # USD order: base, hips (FL,FR), Head_upper, hips (RL,RR), thighs (FL,FR), Head_lower, thighs (RL,RR), calves, feet
         self.body_names = [
-            "base",                                      # Base body
-            "FL_hip", "FL_thigh", "FL_calf", "FL_foot", # Front Left leg
-            "FR_hip", "FR_thigh", "FR_calf", "FR_foot", # Front Right leg
-            "RL_hip", "RL_thigh", "RL_calf", "RL_foot", # Rear Left leg
-            "RR_hip", "RR_thigh", "RR_calf", "RR_foot", # Rear Right leg
+            "base",                                          # 0: Base body
+            "FL_hip", "FR_hip",                             # 1-2: Front hip bodies
+            "Head_upper",                                    # 3: Head upper part
+            "RL_hip", "RR_hip",                             # 4-5: Rear hip bodies
+            "FL_thigh", "FR_thigh",                         # 6-7: Front thigh bodies
+            "Head_lower",                                    # 8: Head lower part (between front and rear thighs)
+            "RL_thigh", "RR_thigh",                         # 9-10: Rear thigh bodies
+            "FL_calf", "FR_calf", "RL_calf", "RR_calf",     # 11-14: Calf bodies
+            "FL_foot", "FR_foot", "RL_foot", "RR_foot",     # 15-18: Foot bodies
         ]
      
         # DOF names (12 DOF total - 3 per leg)
@@ -38,12 +43,13 @@ class UnitreeGo2(QuadrupedRobot, ABC):
             "FL_calf_joint","FR_calf_joint", "RL_calf_joint","RR_calf_joint",
         ]
         
-        # Specific body part names
-        self.base_name = "base"
-        self.foot_names = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
-        self.hip_names = ["FL_hip", "FR_hip", "RL_hip", "RR_hip"]
-        self.thigh_names = ["FL_thigh", "FR_thigh", "RL_thigh", "RR_thigh"]
-        self.calf_names = ["FL_calf", "FR_calf", "RL_calf", "RR_calf"]
+        # Specific body part names (with correct indices based on exact USD order)
+        self.base_name = "base"  # Index: 0
+        self.hip_names = ["FL_hip", "FR_hip", "RL_hip", "RR_hip"]  # Indices: 1, 2, 4, 5
+        self.head_names = ["Head_upper", "Head_lower"]  # Indices: 3, 8
+        self.thigh_names = ["FL_thigh", "FR_thigh", "RL_thigh", "RR_thigh"]  # Indices: 6, 7, 9, 10
+        self.calf_names = ["FL_calf", "FR_calf", "RL_calf", "RR_calf"]  # Indices: 11-14
+        self.foot_names = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]  # Indices: 15-18
         
         # Contact bodies (feet with contact sensors)
         self.contact_body_names = self.foot_names.copy()
@@ -181,8 +187,8 @@ class UnitreeGo2(QuadrupedRobot, ABC):
         if not self.dof_names or len(self.dof_names) != self.expected_n_dofs:
             errors.append(f"Expected {self.expected_n_dofs} DOFs, got {len(self.dof_names) if self.dof_names else 0}")
         
-        # Check body configuration
-        expected_bodies = 1 + (self.n_legs * 4)  # base + 4 parts per leg
+        # Check body configuration (base + 4*legs + 2 head parts for Go2)
+        expected_bodies = 1 + (self.n_legs * 4) + 2  # base + 4 parts per leg + head_upper + head_lower
         if not self.body_names or len(self.body_names) != expected_bodies:
             errors.append(f"Expected {expected_bodies} bodies, got {len(self.body_names) if self.body_names else 0}")
         
