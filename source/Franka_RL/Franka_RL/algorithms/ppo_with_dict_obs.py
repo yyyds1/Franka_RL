@@ -6,6 +6,9 @@ from rsl_rl.storage import RolloutStorage
 class PPOWithDictObs(PPO):
     """扩展 PPO 以支持字典格式的观测和分离的 actor/critic 观测"""
     
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
     def init_storage(self, training_type, num_envs, num_transitions_per_env, obs_dict, actions_shape):
         """
         初始化存储，传递字典格式的观测给 RolloutStorage
@@ -83,20 +86,36 @@ class PPOWithDictObs(PPO):
         # 从字典中提取张量用于策略计算
         obs_tensor = obs if isinstance(obs, torch.Tensor) else obs_dict["policy"]
         privileged_obs_tensor = privileged_obs if isinstance(privileged_obs, torch.Tensor) else privileged_obs_dict.get("critic", obs_tensor)
-        
-        # Sample actions using actor (只使用 policy obs)
-        actions = self.policy.act(obs_tensor).detach()
-        self.transition.actions = actions
-        
+        # Sample actions and compute distribution statistics
+        actions = self.policy.act(obs_tensor)
+        # The policy's distribution is updated inside policy.act()
+        action_log_prob = self.policy.get_actions_log_prob(actions).detach()
+        action_mean = self.policy.action_mean.detach()
+        action_std = self.policy.action_std.detach()
+
+        self.transition.actions = actions.detach()
+        self.transition.actions_log_prob = action_log_prob
+        self.transition.action_mean = action_mean
+        self.transition.action_sigma = action_std
+
         # Evaluate value using critic (使用 privileged obs)
         values = self.policy.evaluate(privileged_obs_tensor).detach()
         self.transition.values = values
-        
-        # Note: log_prob, action_mean, action_sigma 将在 update() 时重新计算
-        self.transition.actions_log_prob = torch.zeros_like(values)
-        self.transition.action_mean = torch.zeros_like(actions)
-        self.transition.action_sigma = torch.zeros_like(actions)
-        
+
+        # After distribution created in policy.act(), we can clamp std to stabilize KL
+        if hasattr(self.policy, 'distribution') and self.policy.distribution is not None:
+            try:
+                # Clamp extremely small or large std to avoid numerical explosions
+                if hasattr(self.policy, 'action_std'):
+                    std = self.policy.action_std
+                    clamped_std = torch.clamp(std, min=1e-6, max=10.0)
+                    # If clamping changed values, rebuild distribution with same mean
+                    if not torch.allclose(std, clamped_std):
+                        mean = self.policy.action_mean
+                        from torch.distributions import Normal
+                        self.policy.distribution = Normal(mean, clamped_std)
+            except Exception:
+                pass
         return actions
     
     def compute_returns(self, last_privileged_obs):

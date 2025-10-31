@@ -226,9 +226,10 @@ class ActorCriticSharedTransformer(nn.Module):
             std = torch.exp(self.log_std).expand_as(mean)
         else:
             raise ValueError(f"Unknown std type: {self.noise_std_type}")
-        
+        # 3.1 Clamp std for numerical stability (remove diagnostic attribute storage)
+        safe_std = torch.clamp(std, min=1e-4, max=10.0)
         # 4. Create distribution
-        self.distribution = Normal(mean, std)
+        self.distribution = Normal(mean, safe_std)
     
     def act(self, observations, **kwargs):
         """

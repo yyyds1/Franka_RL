@@ -19,7 +19,7 @@ algorithm:
   gamma: 0.99
   lam: 0.95
   entropy_coef: 0.01
-  desired_kl: 0.01
+  desired_kl: 0.03
   max_grad_norm: 1.0
   value_loss_coef: 0.5
   use_clipped_value_loss: true
@@ -60,6 +60,12 @@ policy:
       
       # 最大序列长度 - 机器人的记忆时间步数
       max_sequence_length: 100
+      
+      # ==================== Sequence Caching Configuration ====================
+      # 启用序列缓存 - 累积历史观测以实现多步注意力
+      # 设为 true 时，Transformer 会维护 max_sequence_length 步的历史缓存
+      # 设为 false 时，退回到单步处理（用于调试或对比）
+      enable_sequence_caching: true
 
       input_models:
         obs_mlp:

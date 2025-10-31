@@ -198,7 +198,7 @@ class Go2EnvCfg(DirectRLEnvCfg):
 
         # Orientation and motion stability (negative)
         "flat_orientation": -0.5,          # Penalize body tilt (gravity vector error)
-        "lin_vel_z_l2": -0.5,              # Penalize vertical velocity (suppress jumping/sinking)
+        "lin_vel_z_l2": -0.05,              # Penalize vertical velocity (suppress jumping/sinking)
         "ang_vel_xy_l2": -0.05,            # Penalize roll/pitch rates (suppress body rotation)
 
         # Energy and smoothness (negative)

@@ -46,6 +46,15 @@ class Transformer(nn.Module):
 
         self.input_models = nn.ModuleDict(input_models)
         self.feature_size = self.config.transformer_token_size * len(input_models)
+        
+        # Sequence caching for temporal attention (multi-step history)
+        self.max_history_steps = config.get("max_sequence_length", 100)
+        self.history_buffer = None  # Will be initialized on first forward: [num_envs, max_seq_len, feature_dim]
+        self.step_counters = None  # Per-environment step counter: [num_envs]
+        self.enable_sequence_caching = config.get("enable_sequence_caching", True)  # Can be disabled for debugging
+        
+        print(f"[Transformer] Sequence caching: {'ENABLED' if self.enable_sequence_caching else 'DISABLED'}, "
+              f"max_history_steps={self.max_history_steps}")
 
         # Transformer layers with RoPE support
         self.use_rope = config.get("use_rope", False)
@@ -244,11 +253,175 @@ class Transformer(nn.Module):
 
         return output
 
-    def forward(self, input_dict, **kwargs):
-        # 使用 get_extracted_features 提取特征
-        output = self.get_extracted_features(input_dict)
+    def clear_cache(self, env_indices=None):
+        """
+        Clear sequence history buffer for specified environments.
         
-        # 通过输出模型（如果有）
+        Args:
+            env_indices: Indices of environments to reset. If None, reset all.
+        """
+        if self.history_buffer is None:
+            return
+        
+        if env_indices is None:
+            # Reset all environments
+            self.history_buffer.zero_()
+            if self.step_counters is not None:
+                self.step_counters.zero_()
+        else:
+            # Reset specific environments
+            if len(env_indices) > 0:
+                self.history_buffer[env_indices] = 0
+                if self.step_counters is not None:
+                    self.step_counters[env_indices] = 0
+    
+    def forward(self, input_dict, **kwargs):
+        """
+        Forward pass with optional sequence caching for temporal attention.
+        
+        If sequence caching is enabled, this accumulates observations over time
+        and feeds the history to the Transformer to enable multi-step attention.
+        """
+        # Extract current step features: [batch_size, feature_dim]
+        current_features = self.get_extracted_features(input_dict)
+        
+        # If sequence caching is disabled, use single-step processing (original behavior)
+        if not self.enable_sequence_caching:
+            if hasattr(self, "output_model"):
+                output = self.output_model(current_features)
+            else:
+                output = current_features
+            return output
+        
+        # === Sequence Caching Logic ===
+        batch_size = current_features.shape[0]
+        feature_dim = current_features.shape[-1]
+        device = current_features.device
+        
+        # Initialize buffers ONLY on first forward pass
+        # CRITICAL: Buffer should only store per-environment history, not per-timestep!
+        # During rollout: batch_size = num_envs (e.g., 4096)
+        # During PPO update: batch_size = num_envs * num_steps (e.g., 98304)
+        # We should ONLY cache during rollout, NOT during update!
+        if self.history_buffer is None:
+            # Initialize with the number of environments (first forward call)
+            self.history_buffer = torch.zeros(
+                batch_size, self.max_history_steps, feature_dim,
+                device=device, dtype=current_features.dtype,
+                requires_grad=False  # Explicitly disable gradient to avoid inference mode issues
+            )
+            self.step_counters = torch.zeros(batch_size, dtype=torch.long, device=device)
+            self.num_envs = batch_size  # Remember the actual number of environments
+            print(f"[Transformer] Initialized history buffer for {batch_size} environments, "
+                  f"shape {self.history_buffer.shape}, memory: {self.history_buffer.numel() * 4 / 1024**2:.1f} MB")
+        
+        # CRITICAL FIX: During PPO update, batch_size = num_envs * num_steps
+        # We should NOT update buffer during training, only during rollout!
+        # Detect if we're in update phase by checking if batch_size is much larger than num_envs
+        is_rollout = (batch_size == self.num_envs)
+        
+        if not is_rollout:
+            # During PPO update: Don't use sequence caching!
+            # Just process current_features directly without temporal context
+            # This is acceptable because PPO uses advantage estimation, not temporal modeling
+            if hasattr(self, "output_model"):
+                output = self.output_model(current_features)
+            else:
+                output = current_features
+            return output
+        
+        # Update circular buffer for each environment
+        # For efficiency, we use modulo indexing instead of rolling
+        write_indices = self.step_counters % self.max_history_steps  # [batch_size]
+        
+        # Memory-efficient update: Use scatter_ directly on detached buffer
+        # We must be careful about inference mode and gradient graphs
+        # Strategy: Temporarily work with .data (raw storage) to bypass autograd
+        indices_expanded = write_indices.view(batch_size, 1, 1).expand(-1, 1, feature_dim)
+        
+        # Direct in-place update using .data to avoid creating copies
+        # This bypasses autograd tracking and is safe since buffer should never require grad
+        with torch.no_grad():
+            self.history_buffer.scatter_(1, indices_expanded, current_features.unsqueeze(1))
+        
+        # Increment step counters (also in no_grad to avoid tracking)
+        with torch.no_grad():
+            self.step_counters.add_(1)  # In-place add
+        
+        # ========== VECTORIZED SEQUENCE CONSTRUCTION ==========
+        # For efficiency with large batch sizes (e.g., 4096), we use vectorized operations
+        # instead of Python loops to construct and pad sequences
+        
+        # Compute valid lengths for all environments
+        # valid_len = min(step_counter, max_history_steps)
+        valid_lens = torch.clamp(self.step_counters, max=self.max_history_steps)  # [batch_size]
+        max_valid_len = valid_lens.max().item()
+        
+        # For simplicity and efficiency, use the buffer as-is without reordering
+        # This means we use the most recent max_valid_len steps for each environment
+        # Reordering for circular buffer can be skipped in early training when buffer not full
+        
+        # Take the most recent valid_len steps from each environment
+        # For now, use first valid_len steps (oldest to newest order)
+        # Shape: [batch_size, max_valid_len, feature_dim]
+        # Use detach() to break gradient graph, but avoid clone() to save memory
+        # The slice creates a view (no copy), permute also creates a view
+        # Only .contiguous() at the end will create a copy if needed
+        history_batch = self.history_buffer[:, :max_valid_len, :].detach()
+        
+        # Create attention mask: True for padding (invalid), False for valid
+        # Shape: [batch_size, max_valid_len]
+        seq_indices = torch.arange(max_valid_len, device=device).unsqueeze(0).expand(batch_size, -1)
+        mask_batch = seq_indices >= valid_lens.unsqueeze(1)  # True where index >= valid_len
+        
+        # Transpose to transformer format: [seq_len, batch, feature_dim]
+        # .contiguous() will make a copy only if needed for the transformer
+        history_batch = history_batch.permute(1, 0, 2).contiguous()
+        
+        # Expand mask for multi-head attention: [batch*num_heads, seq_len, seq_len]
+        # The mask format: True means "mask this position" (invalid)
+        # We create a causal mask + padding mask
+        attn_mask = mask_batch.unsqueeze(1).expand(-1, max_valid_len, -1)  # [batch, seq, seq]
+        attn_mask = torch.repeat_interleave(attn_mask, self.config.num_heads, dim=0)  # [batch*heads, seq, seq]
+        
+        # Debug logging (only print occasionally to avoid spam)
+        if hasattr(self, '_forward_call_count'):
+            self._forward_call_count += 1
+        else:
+            self._forward_call_count = 0
+        
+        # Log every 1000 steps to track sequence length growth
+        if self._forward_call_count % 1000 == 0:
+            avg_valid_len = sum(min(sc.item(), self.max_history_steps) for sc in self.step_counters) / batch_size
+            max_seq = max(min(sc.item(), self.max_history_steps) for sc in self.step_counters)
+            min_seq = min(min(sc.item(), self.max_history_steps) for sc in self.step_counters)
+            print(f"[Transformer] Step {self._forward_call_count}: avg_seq_len={avg_valid_len:.1f}/{self.max_history_steps} "
+                  f"(min={min_seq}, max={max_seq}), batch_size={batch_size}, feature_dim={feature_dim}")
+        
+        # Apply Transformer encoder
+        # Output shape: [seq_len, batch, feature_dim]
+        if self.use_rope:
+            transformer_output = self.seqTransEncoder(history_batch, mask=attn_mask)
+        else:
+            # Add positional encoding for traditional transformer
+            history_batch = self.sequence_pos_encoder(history_batch)
+            transformer_output = self.seqTransEncoder(history_batch, mask=attn_mask)
+        
+        # Extract output corresponding to the most recent observation for each environment
+        # Since we use history_buffer[:, :max_valid_len, :] without reordering,
+        # the most recent observation is at index (valid_lens - 1) for each environment
+        # Shape: transformer_output is [seq_len, batch, feature_dim]
+        
+        # For efficiency, we can use the last valid position for each environment
+        # Create indices: [batch_size] with values (valid_len - 1)
+        last_valid_indices = (valid_lens - 1).clamp(min=0)  # [batch_size]
+        
+        # Gather from transformer_output using advanced indexing
+        # We need output at position last_valid_indices[b] for each batch b
+        batch_indices = torch.arange(batch_size, device=device)
+        output = transformer_output[last_valid_indices, batch_indices, :]  # [batch, feature_dim]
+        
+        # Pass through output model if present
         if hasattr(self, "output_model"):
             output = self.output_model(output)
         

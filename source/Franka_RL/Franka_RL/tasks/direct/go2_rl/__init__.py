@@ -20,6 +20,6 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.go2_env_cfg:Go2EnvCfg",
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}:rsl_rl_ppo_cfg.yaml",  # 使用默认配置
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}:rsl_rl_ppo_transformer_cfg.yaml", 
     },
 )

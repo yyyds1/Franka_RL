@@ -19,7 +19,7 @@ algorithm:
   gamma: 0.99
   lam: 0.95
   entropy_coef: 0.01
-  desired_kl: 0.01
+  desired_kl: 0.03
   max_grad_norm: 1.0
   value_loss_coef: 0.5
   use_clipped_value_loss: true
@@ -57,6 +57,9 @@ policy:
       use_rope: true
       rope_theta: 5000.0
       max_sequence_length: 100
+      
+      # Enable sequence caching - accumulate history for multi-step attention
+      enable_sequence_caching: true
       # ============================================================
 
       # Input MLP: observation → transformer token

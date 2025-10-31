@@ -76,7 +76,20 @@ class ActorCriticWithTransformer(nn.Module):
         ]
 
     def reset(self, dones=None):
-        pass
+        """
+        Reset hidden states / sequence cache for done environments.
+        
+        For Transformer with sequence caching, this clears the history buffer.
+        """
+        if hasattr(self.actor, 'clear_cache'):
+            if dones is None:
+                # Reset all environments
+                self.actor.clear_cache()
+            else:
+                # Reset only done environments
+                done_indices = torch.nonzero(dones, as_tuple=False).squeeze(-1)
+                if len(done_indices) > 0:
+                    self.actor.clear_cache(done_indices)
     
     def update_normalization(self, obs):
         """Update observation normalization.
@@ -113,7 +126,8 @@ class ActorCriticWithTransformer(nn.Module):
         else:
             raise ValueError(f"Unknown standard deviation type: {self.noise_std_type}. Should be 'scalar' or 'log'")
         # create distribution
-        self.distribution = Normal(mean, std)
+        safe_std = torch.clamp(std, min=1e-4, max=10.0)
+        self.distribution = Normal(mean, safe_std)
 
     def act(self, observations, **kwargs):
         self.update_distribution(observations)

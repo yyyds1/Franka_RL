@@ -8,14 +8,14 @@ This repository provides RL framework for Dexhand and robotics arm manipulation 
 
 - Clone or copy this repository:
     ```bash
-    git clone https://github.com/yyyds1/Franka_RL.git
+    git clone https://github.com/BHCHB/Loco.git
     ```
 
 - It's recommended to create a new python environment for the repository(e.g. Conda environment)
 :
     ```bash
     conda create -n frankarl python=3.11
-    conda activate frankarl
+    conda activate loco
     ```
 
 - Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).

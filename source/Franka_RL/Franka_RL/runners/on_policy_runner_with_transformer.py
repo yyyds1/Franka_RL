@@ -294,6 +294,11 @@ class OnPolicyRunnerWithTransformer:
                     
                     # Move to device
                     obs_raw, rewards, dones = (obs_raw.to(self.device), rewards.to(self.device), dones.to(self.device))
+                    
+                    # Reset policy hidden states / sequence cache for done environments
+                    # This is critical for Transformer with sequence caching
+                    if hasattr(self.alg.policy, 'reset'):
+                        self.alg.policy.reset(dones)
 
                     # Extract observations (handle TensorDict)
                     obs = extract_tensor_from_tensordict(obs_raw, key="policy")
@@ -446,6 +451,8 @@ class OnPolicyRunnerWithTransformer:
                 self.writer.add_scalar(
                     "Train/mean_episode_length/time", statistics.mean(locs["lenbuffer"]), self.tot_time
                 )
+
+        # Cleaned debug instrumentation removed (kl_mean, lr_events, action std range, flags, reward variance)
 
         str = f" \033[1m Learning iteration {locs['it']}/{locs['tot_iter']} \033[0m "
 

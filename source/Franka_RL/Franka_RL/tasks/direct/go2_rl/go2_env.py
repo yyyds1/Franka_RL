@@ -298,12 +298,12 @@ class Go2Env(DirectRLEnv):
         illegal += hip_hit.float() + calf_hit.float()
         r_illegal = illegal * self.reward_weights["illegal_contact"]
         """
-        # Survival bonus (fixed reward per timestep)
-        r_alive = torch.ones(self.num_envs, dtype=torch.float32, device=self.device) \
-                  * self.reward_weights["alive_bonus"]
+        # Survival bonus (fixed reward per timestep for alive agents)
+        died, _ = self._get_dones()
+        alive_mask = ~died  # Boolean mask: True for alive envs
+        r_alive = alive_mask.float() * self.reward_weights["alive_bonus"]
 
         # Termination penalty
-        died, _ = self._get_dones()
         r_terminal = died.float() * self.reward_weights["termination_penalty"]
 
         # Total reward
@@ -336,6 +336,7 @@ class Go2Env(DirectRLEnv):
             "rewards/termination": r_terminal.mean(),
             "rewards/total": total_reward.mean(),
             "debug/num_died": died.sum(),
+            "debug/survival_rate": alive_mask.float().mean(),  # Ratio of alive envs
             #"debug/illegal_contacts": illegal.sum(),
         }
 
@@ -471,11 +472,13 @@ class Go2Env(DirectRLEnv):
         self.robot.reset(env_ids)
         
         pos_range = self.cfg.init_state_cfg["pos_range"]
-        init_pos = self.robot.data.default_root_state[env_ids, :3].clone()
-        init_pos += self.scene.env_origins[env_ids]
+        # Start with environment origins (terrain height)
+        init_pos = self.scene.env_origins[env_ids].clone()
+        # Add random x, y offsets
         init_pos[:, 0] += sample_uniform(pos_range["x"][0], pos_range["x"][1], (len(env_ids),), self.device)
         init_pos[:, 1] += sample_uniform(pos_range["y"][0], pos_range["y"][1], (len(env_ids),), self.device)
-        init_pos[:, 2] += pos_range["z"][0]
+        # Set absolute z height above terrain
+        init_pos[:, 2] += pos_range["z"][0]  # 0.32m above terrain
 
         rot_range = self.cfg.init_state_cfg["rot_range"]
         yaw = sample_uniform(rot_range["yaw"][0], rot_range["yaw"][1], (len(env_ids),), self.device)
@@ -496,7 +499,7 @@ class Go2Env(DirectRLEnv):
             self.default_joint_pos = torch.tensor(joint_pos_list, dtype=torch.float32, device=self.device)
 
         joint_pos = self.default_joint_pos.unsqueeze(0).repeat(len(env_ids), 1)
-        joint_pos += sample_uniform(-0.1, 0.1, joint_pos.shape, self.device)
+        joint_pos += sample_uniform(-0.05, 0.05, joint_pos.shape, self.device)  # Reduced from ±0.1 to ±0.05
         joint_vel = torch.zeros(len(env_ids), 12, device=self.device)
 
         root_state = torch.cat([init_pos, init_quat, init_vel], dim=1)
