@@ -8,6 +8,7 @@ import numpy as np
 from hydra.utils import instantiate
 
 from Franka_RL.utils import model_utils
+from Franka_RL.models.rope import create_rope_transformer_encoder
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
@@ -46,18 +47,37 @@ class Transformer(nn.Module):
         self.input_models = nn.ModuleDict(input_models)
         self.feature_size = self.config.transformer_token_size * len(input_models)
 
-        # Transformer layers
-        self.sequence_pos_encoder = PositionalEncoding(config.latent_dim)
-        seqTransEncoderLayer = nn.TransformerEncoderLayer(
-            d_model=config.latent_dim,
-            nhead=config.num_heads,
-            dim_feedforward=config.ff_size,
-            dropout=config.dropout,
-            activation=model_utils.get_activation_func(config.activation, return_type="functional"),
-        )
-        self.seqTransEncoder = nn.TransformerEncoder(
-            seqTransEncoderLayer, num_layers=config.num_layers
-        )
+        # Transformer layers with RoPE support
+        self.use_rope = config.get("use_rope", False)
+        
+        if self.use_rope:
+            # Use RoPE - no additional positional encoding needed
+            print(f"[Transformer] Using RoPE with theta={config.get('rope_theta', 10000.0)}, "
+                  f"max_seq_len={config.get('max_sequence_length', 2048)}")
+            self.seqTransEncoder = create_rope_transformer_encoder(
+                d_model=config.latent_dim,
+                nhead=config.num_heads,
+                num_layers=config.num_layers,
+                dim_feedforward=config.ff_size,
+                dropout=config.dropout,
+                activation=config.activation if isinstance(config.activation, str) else "relu",
+                rope_theta=config.get("rope_theta", 10000.0),
+                max_seq_len=config.get("max_sequence_length", 2048),
+            )
+        else:
+            # Use traditional positional encoding
+            print(f"[Transformer] Using traditional PositionalEncoding")
+            self.sequence_pos_encoder = PositionalEncoding(config.latent_dim)
+            seqTransEncoderLayer = nn.TransformerEncoderLayer(
+                d_model=config.latent_dim,
+                nhead=config.num_heads,
+                dim_feedforward=config.ff_size,
+                dropout=config.dropout,
+                activation=model_utils.get_activation_func(config.activation, return_type="functional"),
+            )
+            self.seqTransEncoder = nn.TransformerEncoder(
+                seqTransEncoderLayer, num_layers=config.num_layers
+            )
 
         if config.get("output_model", None) is not None:
             self.output_model = instantiate(config.output_model)
@@ -84,11 +104,11 @@ class Transformer(nn.Module):
                 # 将字典的所有值拼接成一个张量
                 input_tensor = torch.cat([v for v in input_dict.values()], dim=-1)
             
-            # 保存原始字典供后续使用（掩码等）
+           
             original_input_dict = input_dict
             is_dict_input = True
         else:
-            # 如果已经是张量，检查维度
+           
             if not hasattr(input_dict, 'shape'):
                 raise TypeError(f"input_dict is not a tensor or dict, got {type(input_dict)}")
             
@@ -129,7 +149,7 @@ class Transformer(nn.Module):
                         key_obs = {input_key: key_obs}
                         key_obs = input_model(key_obs)
                     elif operation.type == "mask_multiply":
-                        # 使用原始字典（如果可用）来访问掩码
+                        
                         mask_source = original_input_dict if is_dict_input else input_tensor
                         mask_data = mask_source[self.mask_keys[model_name]]
                         num_mask_dims = len(mask_data.shape)
@@ -140,7 +160,7 @@ class Transformer(nn.Module):
                             *((1,) * extra_needed_dims),
                         )
                     elif operation.type == "mask_multiply_concat":
-                        # 使用原始字典（如果可用）来访问掩码
+                        
                         mask_source = original_input_dict if is_dict_input else input_tensor
                         mask_data = mask_source[self.mask_keys[model_name]]
                         num_mask_dims = len(mask_data.shape)

@@ -26,6 +26,7 @@ from rsl_rl.modules import (
 from rsl_rl.utils import store_code_state
 
 from Franka_RL.runners.actor_critic_with_transformer import ActorCriticWithTransformer
+from Franka_RL.runners.actor_critic_shared_transformer import ActorCriticSharedTransformer
 from Franka_RL.algorithms.ppo_with_dict_obs import PPOWithDictObs
 
 
@@ -86,7 +87,7 @@ class OnPolicyRunnerWithTransformer:
 
         # evaluate the policy class
         policy_class = eval(self.policy_cfg.pop("class_name"))
-        policy: ActorCritic | ActorCriticRecurrent | StudentTeacher | StudentTeacherRecurrent | ActorCriticWithTransformer = policy_class(
+        policy: ActorCritic | ActorCriticRecurrent | StudentTeacher | StudentTeacherRecurrent | ActorCriticWithTransformer | ActorCriticSharedTransformer = policy_class(
             num_obs, num_privileged_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
 
@@ -138,7 +139,7 @@ class OnPolicyRunnerWithTransformer:
             self.privileged_obs_normalizer = torch.nn.Identity().to(self.device)  # no normalization
 
         # init storage and model
-        # 构造观测字典，包含所有观测类型的示例张量
+    
         obs_dict = {"policy": torch.zeros(num_obs, device=self.device)}
         if self.privileged_obs_type is not None and num_privileged_obs != num_obs:
             obs_dict[self.privileged_obs_type] = torch.zeros(num_privileged_obs, device=self.device)
@@ -147,8 +148,8 @@ class OnPolicyRunnerWithTransformer:
             self.training_type,
             self.env.num_envs,
             self.num_steps_per_env,
-            obs_dict,  # 字典格式，值为1维张量
-            torch.zeros(self.env.num_actions, device=self.device),  # 1维张量
+            obs_dict,  
+            torch.zeros(self.env.num_actions, device=self.device),  
         )
 
         # Decide whether to disable logging
@@ -195,17 +196,8 @@ class OnPolicyRunnerWithTransformer:
             self.env.episode_length_buf = torch.randint_like(
                 self.env.episode_length_buf, high=int(self.env.max_episode_length)
             )
-
-        def extract_tensor_from_tensordict(data, key=None):
-            """递归提取 TensorDict 中的张量
             
-            Args:
-                data: TensorDict 或普通张量
-                key: 要提取的键（如果有）
-                
-            Returns:
-                普通的 torch.Tensor
-            """
+        def extract_tensor_from_tensordict(data, key=None):
             # 如果已经是普通张量，直接返回
             if isinstance(data, torch.Tensor) and not hasattr(data, 'batch_size'):
                 return data
@@ -283,6 +275,8 @@ class OnPolicyRunnerWithTransformer:
         tot_iter = start_iter + num_learning_iterations
         for it in range(start_iter, tot_iter):
             start = time.time()
+            if hasattr(self.env, 'set_learning_iteration'):
+                self.env.set_learning_iteration(it)
             # Rollout
             with torch.inference_mode():
                 for step_idx in range(self.num_steps_per_env):

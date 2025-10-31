@@ -34,7 +34,8 @@ class Go2Env(DirectRLEnv):
         self.action_scale = self.cfg.action_scale
         self.dt = self.cfg.decimation * self.cfg.sim.dt
         self.default_joint_pos = None
-        
+        self.current_learning_iteration = 0  
+
         # Initialize command system (use DirectCommandHelper for automatic management)
         self._init_commands()
         
@@ -52,7 +53,7 @@ class Go2Env(DirectRLEnv):
         self.last_dof_vel = torch.zeros(self.num_envs, 12, dtype=torch.float32, device=self.device)
         self._latest_policy_obs_seq: torch.Tensor | None = None
         
-        # 存储原始动作（网络输出），用于计算action_rate
+        # Store raw actions for action rate penalty
         self.raw_actions = torch.zeros(self.num_envs, 12, dtype=torch.float32, device=self.device)
         self.last_raw_actions = torch.zeros(self.num_envs, 12, dtype=torch.float32, device=self.device)
         
@@ -82,6 +83,9 @@ class Go2Env(DirectRLEnv):
         self.commands = torch.zeros(
             self.num_envs, 4, dtype=torch.float32, device=self.device
         )
+    def set_learning_iteration(self, iteration: int):
+        """Set current learning iteration (called by runner)."""
+        self.current_learning_iteration = iteration
         
     def _setup_scene(self):
         """Set up the simulation scene."""
@@ -128,20 +132,38 @@ class Go2Env(DirectRLEnv):
             joint_pos_dict = go2_robot.init_state.joint_pos
             joint_pos_list = [joint_pos_dict[name] for name in go2_robot.dof_names]
             self.default_joint_pos = torch.tensor(joint_pos_list, dtype=torch.float32, device=self.device)
+    
+    def step(self, action: torch.Tensor):
+        """Execute one time-step of the environment's dynamics with automatic command management."""
+        # Update command system (automatic resampling and standing environment handling)
+       
+        if self.common_step_counter % 500 == 0:
+            print(f"[Go2Env.step] Step {self.common_step_counter}, Env0 commands: {self.commands[0, :3]}")
+
+        if self.cfg.commands_cfg["enable_heading_control"]:
+            self.command_helper.update(self.dt, self.robot)
+        else:
+            self.command_helper.update(self.dt)
+        # Update commands buffer for compatibility
+
+        self.commands = self.command_helper.get_commands_with_heading()
+        
+        # Continue with normal step logic   不确定新command是否成功进入obs空间
+        return super().step(action)
             
     def _pre_physics_step(self, actions: torch.Tensor):
         """Pre-process actions before the physics step."""
         if self._joint_dof_idx is None:
             self._initialize_indices()
 
-        # 保存原始动作（网络输出）用于计算 action_rate
+        # Store raw actions for action rate calculation
         self.last_raw_actions = self.raw_actions.clone()
         self.raw_actions = actions.clone()
         
-        # 保存上一步的关节位置目标
+        # Store previous joint position targets
         self.last_actions = self.actions.clone() if hasattr(self, 'actions') else self.dof_pos
         
-        # 计算关节位置目标
+        # Compute joint position targets
         joint_pos_target = self.dof_pos + actions * self.action_scale
         self.actions = joint_pos_target
 
@@ -217,125 +239,107 @@ class Go2Env(DirectRLEnv):
         return observations
         
     def _get_rewards(self) -> torch.Tensor:
-        """Compute rewards for the Go2 locomotion task."""
+        """LocoFormer-style rewards: exponential tracking + regularization penalties."""
         self._compute_intermediate_values()
 
-        # Velocity tracking rewards
-        lin_vel_error_squared = torch.sum(torch.square(self.lin_vel_error), dim=1)
-        lin_vel_reward = torch.exp(-lin_vel_error_squared / self.reward_params["velocity_tracking_std"]) * self.reward_weights["track_lin_vel_xy_exp"]
+        # Velocity tracking (exponential rewards)
+        lin_err_sq = torch.sum(self.lin_vel_error ** 2, dim=1)
+        lin_track = torch.exp(-lin_err_sq / self.reward_params["velocity_tracking_std_lin"]) \
+                    * self.reward_weights["track_lin_vel_xy_exp"]
         
-        ang_vel_error_squared = torch.square(self.ang_vel_error)
-        ang_vel_reward = torch.exp(-ang_vel_error_squared / self.reward_params["velocity_tracking_std"]) * self.reward_weights["track_ang_vel_z_exp"]
+        ang_err_sq = self.ang_vel_error ** 2
+        ang_track = torch.exp(-ang_err_sq / self.reward_params["velocity_tracking_std_ang"]) \
+                    * self.reward_weights["track_ang_vel_z_exp"]
 
-        # Orientation stability reward
+        # Orientation stability (gravity vector error)
         gravity_target = torch.tensor([0.0, 0.0, -1.0], device=self.device).repeat(self.num_envs, 1)
-        gravity_error = self.projected_gravity - gravity_target
-        flat_orientation_reward = torch.sum(torch.square(gravity_error), dim=1) * self.reward_weights["flat_orientation"]
+        gravity_err_sq = torch.sum((self.projected_gravity - gravity_target) ** 2, dim=1)
+        r_flat = gravity_err_sq * self.reward_weights["flat_orientation"]
 
-        # Base height reward (relative to environment origin)
-        target_height = self.reward_params["target_height"]
-        relative_height = self.base_pos[:, 2] - self.scene.env_origins[:, 2]
-        height_error_squared = torch.square(relative_height - target_height)
-        height_reward = height_error_squared * self.reward_weights["base_height_reward"]
+        # Vertical velocity penalty (suppress jumping/sinking)
+        lin_vel_z = self.base_lin_vel_local[:, 2]
+        r_lin_vel_z = (lin_vel_z ** 2) * self.reward_weights["lin_vel_z_l2"]
 
-        # Feet air time reward
-        cmd_norm = torch.norm(self.commands[:, :2], dim=1)
-        is_moving = (cmd_norm > self.reward_params["moving_threshold"]).float()
-        
-        feet_air_time = self._contact_sensor.data.last_air_time[:, self._feet_indices]
-        first_contact = self._contact_sensor.compute_first_contact(self.dt)[:, self._feet_indices]
-        
-        threshold = self.reward_params["feet_air_time_threshold"]
-        feet_air_time_reward = torch.sum((feet_air_time - threshold) * first_contact, dim=1)
-        feet_air_time_reward *= is_moving * self.reward_weights["feet_air_time"]
-        
-        # Illegal contact penalty
-        illegal_contact = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
-        
-        calf_contact = self._check_illegal_contact_by_name(
-            ["FL_calf", "FR_calf", "RL_calf", "RR_calf"], 
-            threshold=1.0
+        # Roll/pitch rate penalty (suppress body rotation)
+        ang_vel_xy = self.base_ang_vel_local[:, :2]
+        ang_vel_xy_sq = torch.sum(ang_vel_xy ** 2, dim=1)
+        r_ang_vel_xy = ang_vel_xy_sq * self.reward_weights["ang_vel_xy_l2"]
+
+        # Energy penalty (torque squared)
+        tau = self.robot.data.applied_torque[:, :12]
+        torque_l2 = torch.sum(tau * tau, dim=1)
+        r_energy = torque_l2 * self.reward_weights["torque_l2"]
+
+        # Action smoothness penalty (L2 norm of action changes)
+        da = self.raw_actions - self.last_raw_actions
+        action_rate_l2 = torch.sum(da * da, dim=1)
+        r_action_rate = action_rate_l2 * self.reward_weights["action_rate_l2"]
+        """
+        # ---------- 关节越界（|q - q_default| 超 margin 的超额部分） ----------
+        margin = self.reward_params["joint_limit_margin"]
+        q_err = torch.abs(self.dof_pos - self.default_joint_pos.unsqueeze(0)) - margin
+        q_violate = torch.clamp(q_err, min=0.0)
+        r_joint_limit = torch.sum(q_violate, dim=1) * self.reward_weights["joint_limit"]
+
+        # ---------- 非法碰撞（base/hip/calf 等非足端接触力超阈） ----------
+        illegal = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+
+        base_hit = self._check_illegal_contact_by_name(["base"], threshold=self.reward_params["illegal_contact_threshold"])
+        illegal += base_hit.float()
+
+        hip_hit = self._check_illegal_contact_by_name(
+            ["FL_hip", "FR_hip", "RL_hip", "RR_hip"],
+            threshold=self.reward_params["illegal_contact_threshold"]
         )
-        illegal_contact += calf_contact.float()
-        
-        hip_contact = self._check_illegal_contact_by_name(
-            ["FL_hip", "FR_hip", "RL_hip", "RR_hip"], 
-            threshold=1.0
+        calf_hit = self._check_illegal_contact_by_name(
+            ["FL_calf", "FR_calf", "RL_calf", "RR_calf"],
+            threshold=self.reward_params["illegal_contact_threshold"]
         )
-        illegal_contact += hip_contact.float()
-        
-        base_contact = self._check_illegal_contact_by_name(["base"], threshold=1.0)
-        illegal_contact += base_contact.float()
-        
-        contact_reward = illegal_contact * self.reward_weights["feet_contact_forces"]
-
-        # Joint deviation penalty
-        hip_indices = [0, 1, 2, 3]
-        hip_deviation = torch.sum(torch.abs(
-            self.dof_pos[:, hip_indices] - self.default_joint_pos[hip_indices].unsqueeze(0)
-        ), dim=1) * self.reward_weights["hip_deviation"]
-        
-        thigh_calf_indices = [4, 5, 6, 7, 8, 9, 10, 11]
-        joint_deviation = torch.sum(torch.abs(
-            self.dof_pos[:, thigh_calf_indices] - self.default_joint_pos[thigh_calf_indices].unsqueeze(0)
-        ), dim=1) * self.reward_weights["joint_deviation"]
-
-        # Power penalty
-        applied_torques = self.robot.data.applied_torque[:, :12]
-        power = applied_torques * self.dof_vel
-        power_reward = torch.sum(torch.abs(power), dim=1) * self.reward_weights["joint_power"]
-
-        # DOF acceleration penalty
-        dof_acc_reward = torch.sum(torch.square(self.dof_acc), dim=1) * self.reward_weights["dof_acc_l2"]
-
-        # Action smoothness penalties
-        action_diff = self.raw_actions - self.last_raw_actions
-        action_rate_reward = torch.sum(torch.square(action_diff), dim=1) * self.reward_weights["action_rate_l2"]
-        action_smoothness_reward = torch.sum(torch.abs(action_diff), dim=1) * self.reward_weights["action_smoothness"]
+        illegal += hip_hit.float() + calf_hit.float()
+        r_illegal = illegal * self.reward_weights["illegal_contact"]
+        """
+        # Survival bonus (fixed reward per timestep)
+        r_alive = torch.ones(self.num_envs, dtype=torch.float32, device=self.device) \
+                  * self.reward_weights["alive_bonus"]
 
         # Termination penalty
         died, _ = self._get_dones()
-        termination_reward = died.float() * self.reward_weights["termination_penalty"]
+        r_terminal = died.float() * self.reward_weights["termination_penalty"]
 
         # Total reward
         total_reward = (
-            lin_vel_reward + 
-            ang_vel_reward + 
-            flat_orientation_reward + 
-            height_reward + 
-            feet_air_time_reward + 
-            contact_reward + 
-            hip_deviation + 
-            joint_deviation + 
-            power_reward + 
-            dof_acc_reward + 
-            action_rate_reward +
-            action_smoothness_reward +
-            termination_reward
+            lin_track + 
+            ang_track + 
+            r_flat + 
+            r_lin_vel_z + 
+            r_ang_vel_xy + 
+            r_energy + 
+            r_action_rate + 
+            r_alive + 
+            #r_joint_limit + 
+            #r_illegal + 
+            r_terminal
         )
 
-        # Logging reward components
+        # Logging
         self.extras["log"] = {
-            "rewards/lin_vel": lin_vel_reward.mean(),
-            "rewards/ang_vel": ang_vel_reward.mean(),
-            "rewards/flat_orientation": flat_orientation_reward.mean(),
-            "rewards/height": height_reward.mean(),
-            "rewards/feet_air_time": feet_air_time_reward.mean(),
-            "rewards/illegal_contact": contact_reward.mean(),
-            "rewards/hip_deviation": hip_deviation.mean(),
-            "rewards/joint_deviation": joint_deviation.mean(),
-            "rewards/power": power_reward.mean(),
-            "rewards/dof_acc": dof_acc_reward.mean(),
-            "rewards/action_rate": action_rate_reward.mean(),
-            "rewards/action_smoothness": action_smoothness_reward.mean(),
-            "rewards/termination": termination_reward.mean(),
+            "rewards/lin_track": lin_track.mean(),
+            "rewards/ang_track": ang_track.mean(),
+            "rewards/flat": r_flat.mean(),
+            "rewards/lin_vel_z_l2": r_lin_vel_z.mean(),
+            "rewards/ang_vel_xy_l2": r_ang_vel_xy.mean(),
+            "rewards/energy_tau_l2": r_energy.mean(),
+            "rewards/action_rate_l2": r_action_rate.mean(),
+            "rewards/alive_bonus": r_alive.mean(),
+            #"rewards/joint_limit": r_joint_limit.mean(),
+            #"rewards/illegal": r_illegal.mean(),
+            "rewards/termination": r_terminal.mean(),
             "rewards/total": total_reward.mean(),
             "debug/num_died": died.sum(),
-            "debug/illegal_contacts": illegal_contact.sum(),
-            "debug/moving_envs": is_moving.sum(),
+            #"debug/illegal_contacts": illegal.sum(),
         }
-        
-        # Add command system metrics if enabled
+
+        # Optional: command tracking metrics
         if self.cfg.commands_cfg["enable_metrics"]:
             metrics = self.command_helper.get_metrics()
             if metrics:
@@ -347,27 +351,88 @@ class Go2Env(DirectRLEnv):
             standing_ratio = self.command_helper.is_standing_env.float().mean()
             self.extras["log"]["commands/standing_ratio"] = standing_ratio
 
+        # OLD reward function (commented out for reference)
+        """
+        # OLD: Base height reward (relative to environment origin)
+        target_height = self.reward_params["target_height"]
+        relative_height = self.base_pos[:, 2] - self.scene.env_origins[:, 2]
+        height_error_squared = torch.square(relative_height - target_height)
+        height_reward = height_error_squared * self.reward_weights["base_height_reward"]
+
+        # OLD: Feet air time reward (always positive)
+        cmd_norm = torch.norm(self.commands[:, :2], dim=1)
+        is_moving = (cmd_norm > self.reward_params["moving_threshold"]).float()
+        
+        feet_air_time = self._contact_sensor.data.last_air_time[:, self._feet_indices]
+        first_contact = self._contact_sensor.compute_first_contact(self.dt)[:, self._feet_indices]
+        
+        threshold = self.reward_params["feet_air_time_threshold"]
+        feet_air_time_reward = torch.sum(
+            torch.clamp(feet_air_time - threshold, min=0.0) * first_contact, 
+            dim=1
+        )
+        feet_air_time_reward *= is_moving * self.reward_weights["feet_air_time"]
+
+        # OLD: Joint deviation penalty (separate hip and other joints)
+        hip_indices = [0, 1, 2, 3]
+        hip_deviation = torch.sum(torch.abs(
+            self.dof_pos[:, hip_indices] - self.default_joint_pos[hip_indices].unsqueeze(0)
+        ), dim=1) * self.reward_weights["hip_deviation"]
+        
+        thigh_calf_indices = [4, 5, 6, 7, 8, 9, 10, 11]
+        joint_deviation = torch.sum(torch.abs(
+            self.dof_pos[:, thigh_calf_indices] - self.default_joint_pos[thigh_calf_indices].unsqueeze(0)
+        ), dim=1) * self.reward_weights["joint_deviation"]
+
+        # OLD: Power penalty (|P| = |τ * qdot|)
+        applied_torques = self.robot.data.applied_torque[:, :12]
+        power = applied_torques * self.dof_vel
+        power_reward = torch.sum(torch.abs(power), dim=1) * self.reward_weights["joint_power"]
+
+        # OLD: DOF acceleration penalty
+        # dof_acc_reward = torch.sum(torch.square(self.dof_acc), dim=1) * self.reward_weights["dof_acc_l2"]
+
+        # OLD: Action smoothness penalties (L1 norm)
+        # action_diff = self.raw_actions - self.last_raw_actions
+        # action_smoothness_reward = torch.sum(torch.abs(action_diff), dim=1) * self.reward_weights["action_smoothness"]
+        """
+
         return total_reward
         
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Compute termination conditions."""
-        if not hasattr(self, '_intermediate_computed_this_step'):
-            self._compute_intermediate_values()
-        tilted = torch.abs(self.projected_gravity[:, 2]) < torch.cos(
-            torch.tensor(self.cfg.termination_cfg["roll_pitch_max"], device=self.device)
-        )
-
-        base_contact = self._check_illegal_contact_by_name(["base"], threshold=1.0)
-        hip_contact = self._check_illegal_contact_by_name(["FL_hip", "FR_hip", "RL_hip", "RR_hip"], threshold=1.0)
-        calf_contact = self._check_illegal_contact_by_name(["FL_calf", "FR_calf", "RL_calf", "RR_calf"], threshold=1.0)
+        """Compute termination conditions with curriculum."""
+        # Calculate training progress (0.0 at start, 1.0 at 10000 iterations)
+        training_progress = min(self.current_learning_iteration / 10000, 1.0)
         
-        # Height bounds check to prevent robots from falling out of map
+
+        # Base checks 
+        base_contact = self._check_illegal_contact_by_name(["base"], threshold=5.0)
+        
+        # Height bounds
         relative_height = self.base_pos[:, 2] - self.scene.env_origins[:, 2]
         out_of_bounds = (relative_height < 0.01) | (relative_height > 5.0)
-
-        terminated = tilted | base_contact | hip_contact | calf_contact | out_of_bounds
+        
+        terminated = base_contact | out_of_bounds
+        
+        # Gradually enable additional checks (only after 50% training)
+        if training_progress > 0.5:
+            # Enable tilt check
+            tilted = torch.abs(self.projected_gravity[:, 2]) < torch.cos(
+                torch.tensor(self.cfg.termination_cfg["roll_pitch_max"], device=self.device)
+            )
+            terminated = terminated | tilted
+    
+        # Enable calf/hip checks only after 75% training
+        if training_progress > 0.75:
+            hip_contact = self._check_illegal_contact_by_name(
+                ["FL_hip", "FR_hip", "RL_hip", "RR_hip"], threshold=1.0
+            )
+            calf_contact = self._check_illegal_contact_by_name(
+                ["FL_calf", "FR_calf", "RL_calf", "RR_calf"], threshold=1.0
+            )
+            terminated = terminated | hip_contact | calf_contact
+    
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-
         return terminated, time_out
     
     def _check_illegal_contact(self, body_indices: list, threshold: float = 1.0) -> torch.Tensor:

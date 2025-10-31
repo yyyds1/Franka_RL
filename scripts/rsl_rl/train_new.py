@@ -99,6 +99,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import Franka_RL.tasks  # noqa: F401
 from Franka_RL.runners import OnPolicyRunnerWithTransformer
+from Franka_RL.runners.actor_critic_shared_transformer import ActorCriticSharedTransformer  # Shared Transformer architecture
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True

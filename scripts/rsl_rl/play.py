@@ -78,6 +78,8 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import Franka_RL.tasks  # noqa: F401
 from Franka_RL.runners import OnPolicyRunnerWithTransformer
+from Franka_RL.runners.actor_critic_with_transformer import ActorCriticWithTransformer
+from Franka_RL.runners.actor_critic_shared_transformer import ActorCriticSharedTransformer
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):

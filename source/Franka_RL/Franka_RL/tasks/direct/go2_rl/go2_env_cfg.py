@@ -165,9 +165,9 @@ class Go2EnvCfg(DirectRLEnvCfg):
     
     init_state_cfg = {
         "pos_range": {
-            "x": [-2.5, 2.5],  # 扩大到 ±2.5米（env_spacing的一半）
-            "y": [-2.5, 2.5],  # 扩大到 ±2.5米，保持在各自的格子内
-            "z": [0.0, 0.0],
+            "x": [-2.5, 2.5],  
+            "y": [-2.5, 2.5],  
+            "z": [0.32, 0.32],
         },
         "rot_range": {
             "roll": [0.0, 0.0],
@@ -190,39 +190,37 @@ class Go2EnvCfg(DirectRLEnvCfg):
     # termination 
     termination_height = 0.15
     
-    # Reward weights configuration
+    # LocoFormer-style Reward Weights
     reward_weights = {
-        # Velocity tracking rewards
-        "track_lin_vel_xy_exp": 1.5,      # Linear velocity tracking (XY plane)
-        "track_ang_vel_z_exp": 1.5,       # Angular velocity tracking (Z axis)
-        
-        # Posture stability penalties
-        "flat_orientation": -2.5,          # Penalize non-flat orientation (L2 norm)
-        "base_height_reward": -5.0,        # Penalize deviation from target height
-        
-        # Feet contact rewards
-        "feet_air_time": 0.2,              # Reward sufficient air time during motion
-        "feet_contact_forces": -0.1,       # Penalize illegal contacts (calf, hip, base) - 增加10倍
-        
-        # Joint and action smoothness
-        "hip_deviation": -0.4,             # Penalize hip joint deviation
-        "joint_deviation": -0.04,          # Penalize other joint deviations
-        "joint_power": -2e-5,              # Penalize power consumption
-        "dof_acc_l2": -2.5e-7,            # Penalize joint accelerations
-        "action_rate_l2": -0.02,          # Penalize action rate (L2)
-        "action_smoothness": -0.02,        # Penalize action smoothness (L1)
-        
-        # Termination penalty
-        "termination_penalty": -20.0,      # Reduced from -100 to allow learning through other rewards
+        # Main tracking rewards (positive)
+        "track_lin_vel_xy_exp": 1.5,       # Linear velocity tracking (exponential)
+        "track_ang_vel_z_exp": 0.8,        # Angular velocity tracking (exponential)
+
+        # Orientation and motion stability (negative)
+        "flat_orientation": -0.5,          # Penalize body tilt (gravity vector error)
+        "lin_vel_z_l2": -0.5,              # Penalize vertical velocity (suppress jumping/sinking)
+        "ang_vel_xy_l2": -0.05,            # Penalize roll/pitch rates (suppress body rotation)
+
+        # Energy and smoothness (negative)
+        "torque_l2": -1.0e-4,              # Penalize torque squared (energy efficiency)
+        "action_rate_l2": -0.5e-3,         # Penalize action changes (encourage smooth control)
+
+        # Survival and constraints (positive/negative)
+        "alive_bonus": 0.5,                # Reward for staying alive each step
+        "joint_limit": -0.3,               # Penalize joint limit violations
+        "illegal_contact": -2.0,           # Penalize non-foot body contacts
+        "termination_penalty": -5.0,       # Penalize episode termination (falling)
     }
     
-    # Reward computation parameters
+    # LocoFormer-style Reward Parameters
     reward_params = {
-        "target_height": 0.32,             # Target base height (meters)
-        "feet_air_time_threshold": 0.5,    # Minimum air time threshold (seconds)
-        "moving_threshold": 0.1,           # Velocity threshold to consider "moving"
-        "velocity_tracking_std": 0.5,      # Standard deviation for velocity tracking exp reward
-        "illegal_contact_threshold": 1.0,  # Force threshold for illegal contacts (N)
+        # Exponential reward temperature (variance for Gaussian kernel)
+        "velocity_tracking_std_lin": 0.25,  # Linear velocity tracking sensitivity
+        "velocity_tracking_std_ang": 0.25,  # Angular velocity tracking sensitivity
+        
+        # Constraint thresholds
+        "joint_limit_margin": 0.1,          # Joint deviation margin (rad) before penalty
+        "illegal_contact_threshold": 1.0,   # Contact force threshold (N) for illegal contacts
     }
     
     def __post_init__(self):
