@@ -452,8 +452,6 @@ class OnPolicyRunnerWithTransformer:
                     "Train/mean_episode_length/time", statistics.mean(locs["lenbuffer"]), self.tot_time
                 )
 
-        # Cleaned debug instrumentation removed (kl_mean, lr_events, action std range, flags, reward variance)
-
         str = f" \033[1m Learning iteration {locs['it']}/{locs['tot_iter']} \033[0m "
 
         if len(locs["rewbuffer"]) > 0:
