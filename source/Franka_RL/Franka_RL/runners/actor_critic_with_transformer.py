@@ -68,7 +68,6 @@ class ActorCriticWithTransformer(nn.Module):
         Normal.set_default_validate_args(False)
 
     @staticmethod
-    # not used at the moment
     def init_weights(sequential, scales):
         [
             torch.nn.init.orthogonal_(module.weight, gain=scales[idx])
