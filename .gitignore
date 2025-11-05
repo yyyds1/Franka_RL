@@ -15,6 +15,15 @@
 **/*.usdz
 **/*.urdf
 
+# No data
+**/*.npz
+**/*.pkl
+**/*.zip
+**/*.json
+**/*.mp4
+
+
+
 # Python
 .DS_Store
 **/*.egg-info/
@@ -78,3 +87,7 @@ tests/
 **/*.pth
 /assets/*
 **/manopth/*
+source/Franka_RL/Franka_RL/dataset/position_retargeting/manopth
+source/Franka_RL/Franka_RL/dataset/oakink2_layer/body_utils/*
+source/Franka_RL/Franka_RL/dataset/oakink2_layer/smplx_extra/*
+

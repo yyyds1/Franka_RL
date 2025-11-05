@@ -27,9 +27,9 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     action_pos_scale = 500
     action_rot_scale = 20
     action_moving_scale = 1.0
-    action_space = 7
-    observation_space = 63
-    state_space = 63
+    action_space = 28
+    observation_space = 7772
+    state_space = 7772
 
     future_frame = 5
 
@@ -37,7 +37,7 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     num_dof = 30
     human_delay = 0.0  # delay in seconds
     human_freq = 5
-    human_resample_on_env_reset = True
+    human_resample_on_env_reset = False
     human_filename = "reorderd_ACCAD_walk_10fps.npy"
     
     # log train info cfg
@@ -71,8 +71,8 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     side = 'right'
         
     # dataset
-    dataset_type = 'DexYcb'
-    dataset_path = ''
+    dataset_type = 'OakInkv2_rh'
+    dataset_path = 'dataset/OakInk-v2'
 
     gym2lab_order: list = [0, 5, 10, 1, 6, 11, 15, 2, 7, 12, 16, 3, 8, 13, 17, 4, 9, 14, 18]
     heading_weight: float = 0.5

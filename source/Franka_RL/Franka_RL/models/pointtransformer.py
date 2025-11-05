@@ -184,9 +184,10 @@ def pointtransformer_seg_repro(**kwargs):
 
 ## Modified from the above PointTransformerSeg
 class PointTransformerEnc(nn.Module):
-    def __init__(self, block=PointTransformerBlock, blocks=[2, 3, 4, 6, 3], c=6, num_points=32768):
+    def __init__(self, config, block=PointTransformerBlock, blocks=[2, 3, 4, 6, 3], c=6, num_points=2048):
         super().__init__()
         self.num_points = num_points
+        self.config = config
         self.c = c
         self.in_planes, planes = c, [32, 64, 128, 256, 512]
         fpn_planes, fpnhead_planes, share_planes = 128, 64, 8
@@ -221,9 +222,11 @@ class PointTransformerEnc(nn.Module):
     #     return p5, x5, o5
     def forward(self, p):
         nE, np = p.shape[0], p.shape[1] / 3
-        p0 = p.view(-1, 3)
-        x0 = p0.clone() if self.c == 3 else torch.cat((p0, p0), 1)
+        p0 = p.clone().view(-1, 3)
+        # p0 = p.view(-1, 3)
+        x0 = p0 if self.c == 3 else torch.cat((p0, p0), 1)
         o0 = torch.arange(1, nE + 1) * np
+        o0 = o0.cuda()
         p1, x1, o1 = self.enc1([p0, x0, o0])
         p2, x2, o2 = self.enc2([p1, x1, o1])
         p3, x3, o3 = self.enc3([p2, x2, o2])

@@ -4,9 +4,9 @@ num_steps_per_env: 24
 max_iterations: 10000
 empirical_normalization: false
 
-num_obs: 63
-num_pre_obs: 63
-num_action: 7
+num_obs: 7772 
+num_pre_obs: 7772
+num_action: 28
 
 algorithm:
   class_name: PPO
@@ -51,17 +51,17 @@ policy:
         obs_mlp:
           _target_: Franka_RL.models.mlp.MLP_WithNorm
           _recursive_: False
-          num_in: ${.....num_obs}
+          num_in: 1628
           num_out: ${...transformer_token_size}
           config:
             mask_key: null
             obs_key: self_obs
             slice_start_idx: 0
-            slice_end_idx: 940
+            slice_end_idx: 1628
             normalize_obs: True
             norm_clamp_value: 5
             layers:
-              - units: 256
+              - units: 512
                 activation: relu
                 use_layer_norm: false
               - units: 256
@@ -72,8 +72,8 @@ policy:
           config:
             mask_key: null
             obs_key: self_pcl
-            slice_start_idx: 940
-            slice_end_idx: ${.slice_start_idx + 4096}
+            slice_start_idx: 1628
+            slice_end_idx: 7772
             froze_param: True
             checkpoint: 'ckpt/pointtransformer.pth'
       output_model:
@@ -107,7 +107,7 @@ policy:
           config:
             obs_key: self_obs
             slice_start_idx: 0
-            slice_end_idx: 63
+            slice_end_idx: 7772
             normalize_obs: True
             norm_clamp_value: 5
       trunk:
@@ -120,6 +120,12 @@ policy:
               activation: relu
               use_layer_norm: false
             - units: 512
+              activation: relu
+              use_layer_norm: false
+            - units: 512
+              activation: relu
+              use_layer_norm: false
+            - units: 256
               activation: relu
               use_layer_norm: false
 

@@ -4,6 +4,8 @@ from isaaclab.assets.articulation import ArticulationCfg
 from .base import DexHand
 from .decorators import register_dexhand
 from abc import ABC, abstractmethod
+from Franka_RL.dataset.transform import aa_to_rotmat
+import numpy as np
 
 class Shadow(DexHand, ABC):
     def __init__(self):
@@ -155,10 +157,11 @@ class Shadow(DexHand, ABC):
 class ShadowRH(Shadow):
     def __init__(self):
         super().__init__()
-        self._usd_path = "./assets/Shadow/shadow_hand_right.usd"
+        self._usd_path = "./assets/Shadow/shadow_hand_right_woarm.usd"
         self.retargeting_cfg["urdf_path"] = "assets/Shadow/shadow_hand_right_woarm.urdf"
         # self.retargeting_cfg["urdf_path"] = "assets/Shadow/shadow_hand_right_glb.urdf"
         self.side = "right"
+        self.relative_rotation = aa_to_rotmat(np.array([0, -np.pi / 2, 0]))
 
     def __str__(self):
         return super().__str__() + "_rh"

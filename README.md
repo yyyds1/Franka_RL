@@ -57,7 +57,19 @@ This repository provides RL framework for Dexhand and robotics arm manipulation 
 
 ## Datasets
 
- <!-- TODO: complete the Dataset Factory-->
+ - This repo now support datasets in following table:
+
+    | Category | Dataset | Discription | Download |
+    |------|------|------|------|
+    | DexhandData | OakInk-v2 | OakInk-v2 HOI dataset | https://huggingface.co/datasets/SII-DongshenYang/OakInk-v2_Shadow |
+
+ - __DexHand Dataset__: Download the retargeting results and objects' usd files and place them under `dataset/dataset_name` dir. For Instance, the structure of `OakInk-v2` dataset should be like:
+     ```
+    dataset
+    └── OakInk-v2
+        ├── retargeting_result
+        └── usd_objects
+    ```
 
 ## RL Libraries
  - The repo provides three RL libraries at present: `rsl_rl`, `rl_games` and `skrl`. It's worth noting that this repo has developed novel `OnPolicyPPORunner` and `ActorCritic` class for `rsl_rl` lib. It is possible to define more complex actor and critic networks, not limited to MLP now. For more details, please check `source/Franka_RL/Franka_RL/runners` for the modified classes, and check `source/Franka_RL/Franka_RL/tasks/direct/franka_rl/agents/rsl_rl_ppo_cfg.yaml` for a template config file. 
@@ -71,6 +83,7 @@ This repository provides RL framework for Dexhand and robotics arm manipulation 
     | Task Name | Task Path | Task Description|
     |-------|--------|----|
     | Franka-Train | source/Franka_RL/Franka_RL/tasks/direct/franka_rl | Train a Franka Panda Arm following end effector trajectories|
+    | Shand-Imitator | source/Franka_RL/Franka_RL/tasks/direct/Shadow_Imitator | Train a Shadow hand following trajectories|
 ## Troubleshooting
 
 ### Pylance Missing Indexing of Extensions

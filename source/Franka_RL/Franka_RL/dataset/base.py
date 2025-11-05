@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 import os
+import json
 from scipy.ndimage import gaussian_filter1d
 import numpy as np
 import torch
@@ -19,7 +20,7 @@ class DexhandData(Dataset, ABC):
         data_dir: str, 
         skip: int = 2,
         device: str = 'cpu',
-        dexhand = None,
+        dexhand: DexHand | None = None,
     ):
         # traj info
         self.data_dir = data_dir
@@ -30,8 +31,8 @@ class DexhandData(Dataset, ABC):
         self.dexhand = dexhand
         self.data = None
         self.fps = None
+        self.max_traj_length = 1000
         # self.traj_num = 0
-        # self.max_traj_length = 0
         # self.traj_len = None # length of each traj [traj_num]
 
         # # robot info
@@ -142,6 +143,51 @@ class DexhandData(Dataset, ABC):
         data["tip_distance"] = np.zeros((traj_len, 5), dtype=np.float32)
 
         return data
+    
+    def allocate_buffer(self, traj_num):
+        self.data = {}
+        self.data["traj_num"] = traj_num
+        self.data["max_traj_length"] = self.max_traj_length
+        self.data["traj_len"] = torch.empty((traj_num), dtype=torch.int, device=self.device)
+        self.data["wrist_pos"] = torch.empty((traj_num, self.max_traj_length, 7), dtype=torch.float32, device=self.device)
+        self.data["wrist_vel"] = torch.empty((traj_num, self.max_traj_length, 6), dtype=torch.float32, device=self.device)
+        self.data["joints_pos"] = torch.empty((traj_num, self.max_traj_length, self.dexhand.n_dofs), dtype=torch.float32, device=self.device)
+        self.data["body_pos"] = torch.empty((traj_num, self.max_traj_length, self.dexhand.n_bodies, 7), dtype=torch.float32, device=self.device)
+        self.data["body_vel"] = torch.empty((traj_num, self.max_traj_length, self.dexhand.n_bodies, 6), dtype=torch.float32, device=self.device)
+        self.data["obj_pose"] = torch.empty((traj_num, self.max_traj_length, 7), dtype=torch.float32, device=self.device)
+        self.data["obj_vel"] = torch.empty((traj_num, self.max_traj_length, 6), dtype=torch.float32, device=self.device)
+        self.data["obj_pcl"] = torch.empty((traj_num, 2048, 3), dtype=torch.float32, device=self.device)
+        self.data["tip_distance"] = torch.empty((traj_num, self.max_traj_length, 5), dtype=torch.float32, device=self.device)
+        self.data["obj_id"] = []
+        self.data["obj_usd"] = []
+
+    def load_data(self):
+        path = os.path.join(self.data_dir, "retargeting_result")
+
+        json_paths = []
+        for filename in os.listdir(path):
+            if(filename.endswith(".json")):
+                filepath = os.path.join(path, filename)
+                json_paths.append(filepath)
+
+        self.allocate_buffer(len(json_paths))
+
+        for i, json_file in enumerate(json_paths):
+            with open(json_file, 'r', encoding='utf-8') as f:
+                traj_data = json.load(f)
+                self.data["traj_len"][i] = min(self.max_traj_length, traj_data["traj_len"])
+                traj_len = self.data["traj_len"][i]
+                self.data["wrist_pos"][i, :traj_len] = torch.tensor(traj_data["wrist_pos"][:traj_len], device=self.device, dtype=torch.float32)
+                self.data["wrist_vel"][i, :traj_len] = torch.tensor(traj_data["wrist_vel"][:traj_len], device=self.device, dtype=torch.float32)
+                self.data["joints_pos"][i, :traj_len] = torch.tensor(traj_data["joints_pos"][:traj_len], device=self.device, dtype=torch.float32)
+                self.data["body_pos"][i, :traj_len] = torch.tensor(traj_data["body_pos"][:traj_len], device=self.device, dtype=torch.float32)
+                self.data["body_vel"][i, :traj_len] = torch.tensor(traj_data["body_vel"][:traj_len], device=self.device, dtype=torch.float32)
+                self.data["obj_pose"][i, :traj_len] = torch.tensor(traj_data["obj_pose"][:traj_len], device=self.device, dtype=torch.float32)
+                self.data["obj_vel"][i, :traj_len] = torch.tensor(traj_data["obj_vel"][:traj_len], device=self.device, dtype=torch.float32)
+                self.data["obj_pcl"][i] = torch.tensor(traj_data["obj_pcl"], device=self.device, dtype=torch.float32)
+                self.data["tip_distance"][i, :traj_len] = torch.tensor(traj_data["tip_distance"][:traj_len], device=self.device, dtype=torch.float32)
+                self.data["obj_id"].append(traj_data["obj_id"])
+                
 
     # def process_data(self, data, idx, rs_verts_obj):
     #     data["obj_trajectory"] = self.mujoco2gym_transf @ data["obj_trajectory"]

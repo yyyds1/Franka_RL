@@ -53,7 +53,7 @@ def to_euler_angles(quat):
     # concat v and r
     return torch.tensor(np.concatenate((v, r), axis=-1), dtype=torch.float32)
 
-class ShandImitator(DirectRLEnv):
+class ShandImitatorEnv(DirectRLEnv):
     cfg: ShandImitatorEnvCfg
 
     def __init__(self, cfg: ShandImitatorEnvCfg, render_mode: str | None = None, **kwargs):
@@ -64,7 +64,7 @@ class ShandImitator(DirectRLEnv):
         self.action_pos_scale = self.cfg.action_pos_scale
         self.action_rot_scale = self.cfg.action_rot_scale
         self.action_moving_scale = self.cfg.action_moving_scale
-        self.joint_limits = self.dexhand.dof_limit
+        self.joint_limits = torch.tensor(self.dexhand.dof_limit, device=self.device)
 
         self.tighten_method = self.cfg.tightenMethod
         self.tighten_factor = self.cfg.tightenFactor
@@ -73,6 +73,7 @@ class ShandImitator(DirectRLEnv):
     def _init_traj(self):
 
         self.dataset = DataFactory.create_data(data_type=self.cfg.dataset_type, device=self.device, dexhand=self.dexhand)
+        self.dataset.load_data()
         self.traj_num = self.dataset.data["traj_num"]
         self.traj_len_max = self.dataset.data["max_traj_length"]
 
@@ -80,8 +81,6 @@ class ShandImitator(DirectRLEnv):
             self.target_jt_i = torch.randint(0, self.traj_num, (self.num_envs, )).to(dtype=torch.int, device=self.device)
         else:
             self.target_jt_i = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
-        self.target_jt_j = (torch.rand(self.num_envs).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i]).to(torch.int)
-        self.running_frame_len = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
 
         self.traj_len_seq = self.dataset.data["traj_len"][self.target_jt_i]
         self.target_wrist_pos_seq = self.dataset.data["wrist_pos"][self.target_jt_i]
@@ -94,6 +93,9 @@ class ShandImitator(DirectRLEnv):
         self.obj_pcl_seq = self.dataset.data["obj_pcl"][self.target_jt_i]
         self.target_tip_distance_seq = self.dataset.data["tip_distance"][self.target_jt_i]
         self.obj_id_seq = self.dataset.data["obj_id"]
+        
+        self.target_jt_j = (torch.rand(self.num_envs).to(dtype=torch.float32, device=self.device) * self.traj_len_seq).to(torch.int64)
+        self.running_frame_len = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
 
         # self.target_wrist_pos = self.target_wrist_pos_seq[:, self.target_jt_j]
         # self.target_wrist_vel = self.target_wrist_vel_seq[:, self.target_jt_j]
@@ -112,7 +114,6 @@ class ShandImitator(DirectRLEnv):
             if self.cfg.human_resample_on_env_reset:
                 resample_i[reset_env_ids] = True
                 self.target_jt_i[reset_env_ids] = torch.randint_like(reset_env_ids, low=0, high=self.traj_num).to(dtype=torch.int, device=self.device)
-                self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i[reset_env_ids]]).to(torch.int)
                 self.running_frame_len[reset_env_ids] = 0
                 self.traj_len_seq = self.dataset.data["traj_len"][self.target_jt_i]
                 self.target_wrist_pos_seq[reset_env_ids] = self.dataset.data["wrist_pos"][self.target_jt_i[reset_env_ids]]
@@ -123,8 +124,9 @@ class ShandImitator(DirectRLEnv):
                 self.target_obj_pos_seq[reset_env_ids] = self.dataset.data["obj_pose"][self.target_jt_i[reset_env_ids]]
                 self.target_obj_vel_seq[reset_env_ids] = self.dataset.data["obj_vel"][self.target_jt_i[reset_env_ids]]
                 self.target_tip_distance_seq[reset_env_ids] = self.dataset.data["tip_distance"][self.target_jt_i[reset_env_ids]]
+                self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len_seq[reset_env_ids]).to(torch.int64)
             else:
-                self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i[reset_env_ids]]).to(torch.int)
+                self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len_seq[reset_env_ids]).to(torch.int64)
                 self.running_frame_len[reset_env_ids] = 0
                 # self.target_jt = self.target_jt_seq[self.target_jt_i, self.target_jt_j]
                 # self.target_eepose = self.target_eepose_seq[self.target_jt_i, self.target_jt_j]
@@ -142,7 +144,7 @@ class ShandImitator(DirectRLEnv):
         # create robot
         self.dexhand = RobotFactory.create_robot(robot_type=self.cfg.robot)
         self.robot_cfg = ArticulationCfg(
-            prim_path=f"/World/envs/env_.*/robot",
+            prim_path=f"/World/envs/env_.*/Robot",
             spawn=sim_utils.UsdFileCfg(
                 usd_path=self.dexhand._usd_path,
                 activate_contact_sensors=True,
@@ -176,35 +178,31 @@ class ShandImitator(DirectRLEnv):
         self._init_traj()
 
         # create object
-        obj_cfg_list = []
-        for usd_path in self.dataset.data["obj_usd"]:
-            obj_name = os.path.basename(usd_path).split('.')[0]
-            obj_cfg = RigidObjectCfg(
-                prim_path=f"/World/envs/env_.*/object",
-                spawn=sim_utils.UsdFileCfg(
-                    usd_path=usd_path,
-                    scale=(1.00, 1.00, 1.00),
-                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                        kinematic_enabled=False,
-                        disable_gravity=True,
-                        enable_gyroscopic_forces=True,
-                        solver_position_iteration_count=8,
-                        solver_velocity_iteration_count=0,
-                        sleep_threshold=0.005,
-                        stabilization_threshold=0.0025,
-                        max_depenetration_velocity=1000.0,
-                    ),
-                    mass_props=sim_utils.MassPropertiesCfg(density=1.0),
+        object_cfg = RigidObjectCfg(
+            prim_path="/World/envs/env_.*/obj",
+            spawn=sim_utils.MultiUsdFileCfg(
+                usd_path=self.dataset.data["obj_usd"],
+                random_choice=False,
+                scale=(1.00, 1.00, 1.00),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    kinematic_enabled=False,
+                    # disable_gravity=True,
+                    disable_gravity=False,
+                    enable_gyroscopic_forces=True,
+                    solver_position_iteration_count=8,
+                    solver_velocity_iteration_count=0,
+                    sleep_threshold=0.005,
+                    stabilization_threshold=0.0025,
+                    max_depenetration_velocity=1000.0,
                 ),
-                init_state=RigidObjectCfg.InitialStateCfg(
-                    pos=(0.0, 0.0, 0.0),
-                    rot=(0.0, 0.0, 0.0, 0.0),
-                ),
-                debug_vis=False,
-            )
-            self.obj_cfg_list.append(obj_cfg)
+                # collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+                mass_props=sim_utils.MassPropertiesCfg(mass=0.05, density=0.0),
+                activate_contact_sensors=True,
+            ),
+            debug_vis=False,
+        )
 
-        self.object = RigidObject([obj_cfg_list[idx] for idx in self.obj_id_seq])
+        self.object = RigidObject(object_cfg)
 
         # create sensors
         self.contact_sensor = {}
@@ -239,10 +237,10 @@ class ShandImitator(DirectRLEnv):
 
 
         # Markers
-        frame_marker_cfg = FRAME_MARKER_CFG.copy()
-        frame_marker_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
-        self.ee_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_current"))
-        self.goal_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_goal"))
+        # frame_marker_cfg = FRAME_MARKER_CFG.copy()
+        # frame_marker_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
+        # self.ee_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_current"))
+        # self.goal_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_goal"))
 
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
@@ -270,11 +268,11 @@ class ShandImitator(DirectRLEnv):
 
         self.wrist_pos = self.robot.data.body_state_w[:, self.robot.body_names.index(self.dexhand.wrist_name), :7] - F.pad(self.scene.env_origins, (0, 4))
         self.wrist_vel = self.robot.data.body_state_w[:, self.robot.body_names.index(self.dexhand.wrist_name), 7:]
-        self.body_pos = self.robot.data.body_state_w[:, :, :7] - F.pad(self.scene.env_origins, (0, 4))
+        self.body_pos = self.robot.data.body_state_w[:, :, :7] - F.pad(self.scene.env_origins, (0, 4)).repeat(1, self.dexhand.n_bodies).view(self.num_envs, self.dexhand.n_bodies, 7)
         self.body_vel = self.robot.data.body_state_w[:, :, 7:]
 
-        self.obj_pos = self.object.root_state_w[:, :7]
-        self.obj_vel = self.object.root_state_w[:, 7:]
+        self.obj_pos = self.object.data.root_state_w[:, :7]
+        self.obj_vel = self.object.data.root_state_w[:, 7:]
         self.obj_com_pos = transform_points(self.object.data.body_com_pos_b, self.obj_pos[:, :3], self.obj_pos[:, 3:]).squeeze()
         self.obj_curr_pcl = transform_points(self.obj_pcl_seq, self.obj_pos[:, :3], self.obj_pos[:, 3:])
         
@@ -288,19 +286,19 @@ class ShandImitator(DirectRLEnv):
         proprioception["joint_vel"] = self.dof_vel # num_dof
         proprioception["cos_joint_pos"] = torch.cos(self.dof_pos) # num_dof
         proprioception["sin_joint_pos"] = torch.sin(self.dof_pos) # num_dof
-        proprioception["wrist_pos"] = torch.cat([torch.zeros_like(self.wrist_pos[:, :3]), self.wrist_pos[:, 3:]], dim=-1).unsqueeze(1) # ignore wrist position 7
+        proprioception["wrist_pos"] = torch.cat([torch.zeros_like(self.wrist_pos[:, :3]), self.wrist_pos[:, 3:]], dim=-1) # ignore wrist position 7
         proprioception["obj_trans"] = self.obj_pos[:, :3] - self.wrist_pos[:, :3] # 3
         proprioception["obj_vel"] = self.obj_vel # 6
-        tip_force = torch.stack([self.contact_sensor.data.net_forces_w[k] for k in self.dexhand.contact_body_names], axis=1)
-        proprioception["tip_force"] = torch.cat([tip_force, torch.norm(tip_force, dim=-1, keepdim=True)], dim=-1) # add force magnitude 15 + 5
+        tip_force = torch.stack([self.contact_sensor[k].data.net_forces_w for k in self.dexhand.contact_body_names], axis=1)
+        proprioception["tip_force"] = torch.cat([tip_force, torch.norm(tip_force, dim=-1, keepdim=True)], dim=-1).reshape(self.num_envs, -1) # add force magnitude 15 + 5
         proprioception["obj_com"] = self.obj_com_pos # 3
-        proprioception["obj_gravity"] = self.object.data.default_mass * self.sim.cfg.gravity # 3
+        proprioception["obj_gravity"] = self.object.data.default_mass.to(self.device) * torch.tensor(self.sim.cfg.gravity, device=self.device) # 3
 
         # target state
         next_target_state = {}
         cur_idx = self.target_jt_j + 1
+        cur_idx = torch.clamp(cur_idx, torch.zeros_like(self.traj_len_seq), self.traj_len_seq - 1)
         cur_idx = torch.stack([cur_idx + t for t in range(self.obs_future_length)], dim=-1)
-        cur_idx = torch.clamp(cur_idx, torch.zeros_like(self.traj_len), self.traj_len - 1)
         nE, nT = self.target_wrist_pos_seq.shape[:2]
         nF = self.obs_future_length
 
@@ -338,7 +336,7 @@ class ShandImitator(DirectRLEnv):
         next_target_state["delta_wrist_ang_vel"] = (target_wrist_ang_vel - cur_wrist_ang_vel[:, None]).reshape(nE, -1) # 3
 
         target_joints_pos = indicing(self.target_body_pos_seq[:, :, 1: ,:3], cur_idx).reshape(nE, nF, -1, 3)
-        cur_joint_pos = self.states["joints_state"][:, 1:, :3]  # skip the base joint
+        cur_joint_pos = self.body_pos[:, 1:, :3]  # skip the base joint
         next_target_state["delta_joints_pos"] = (target_joints_pos - cur_joint_pos[:, None]).reshape(self.num_envs, -1) # 3 * (num_body - 1)
 
         target_joints_vel = indicing(self.target_body_vel_seq[:, :, 1: ,:3], cur_idx).reshape(nE, nF, -1, 3)
@@ -348,7 +346,7 @@ class ShandImitator(DirectRLEnv):
 
         target_obj_transf = indicing(self.target_obj_pos_seq[:, :, :3], cur_idx)
         next_target_state["delta_manip_obj_pos"] = (
-            target_obj_transf - self.obj_pos[:, None]
+            target_obj_transf - self.obj_pos[:, None, :3]
         ).reshape(nE, -1) # 3
 
         target_obj_vel = indicing(self.target_obj_vel_seq[:, :, :3], cur_idx)
@@ -356,7 +354,7 @@ class ShandImitator(DirectRLEnv):
         next_target_state["manip_obj_vel"] = target_obj_vel.reshape(nE, -1) # 3
         next_target_state["delta_manip_obj_vel"] = (target_obj_vel - cur_obj_vel[:, None]).reshape(nE, -1) # 3
 
-        next_target_state["manip_obj_quat"] = indicing(self.target_obj_pos_seq[:, :, 3:], cur_idx)
+        next_target_state["manip_obj_quat"] = indicing(self.target_obj_pos_seq[:, :, 3:], cur_idx).reshape(nE * nF, -1)
         next_target_state["delta_manip_obj_quat"] = quat_mul(
             self.obj_pos[:, 3:].repeat(1, nF, 1).reshape(nE * nF, -1),
             quat_conjugate(next_target_state["manip_obj_quat"]),
@@ -369,7 +367,7 @@ class ShandImitator(DirectRLEnv):
         next_target_state["delta_manip_obj_ang_vel"] = (target_obj_ang_vel - cur_obj_ang_vel[:, None]).reshape(nE, -1) # 3
 
         next_target_state["obj_to_joints"] = torch.norm(
-            self.obj_pos[:, :3] - self.body_pos[:, :, :3], dim=-1
+            self.obj_pos[:, None, :3] - self.body_pos[:, :, :3], dim=-1
         ).reshape(self.num_envs, -1) # 3 * num_body
 
         next_target_state["gt_tips_distance"] = indicing(self.target_tip_distance_seq, cur_idx).reshape(nE, -1) # 1
@@ -435,18 +433,19 @@ class ShandImitator(DirectRLEnv):
         states["manip_obj_vel"] = self.obj_vel[:, :3]
         states["manip_obj_ang_vel"] = self.obj_vel[:, 3:]
 
-        target_states["wrist_pos"] = self.target_wrist_pos_seq[:, :3]
-        target_states["wrist_quat"] = self.target_wrist_pos_seq[:, 3:]
-        target_states["wrist_vel"] = self.target_wrist_vel_seq[:, :3]
-        target_states["wrist_ang_vel"] = self.target_wrist_vel_seq[:, 3:]
-        target_states["joints_pos"] = self.target_body_pos_seq[:, :3]
-        target_states["joints_vel"] = self.target_body_vel_seq[:, :3]
-        target_states["manip_obj_pos"] = self.target_obj_pos_seq[:, :3]
-        target_states["manip_obj_quat"] = self.target_obj_pos_seq[:, 3:]
-        target_states["manip_obj_vel"] = self.target_obj_vel_seq[:, :3]
-        target_states["manip_obj_ang_vel"] = self.target_obj_vel_seq[:, 3:]
-        target_states["power"] = torch.abs(torch.multiply(self.dof_torque, self.dof_vel))
+        env_ids = torch.arange(self.num_envs).to(device=self.device)
+        target_states["wrist_pos"] = self.target_wrist_pos_seq[env_ids, self.target_jt_j, :3]
+        target_states["wrist_quat"] = self.target_wrist_pos_seq[env_ids, self.target_jt_j, 3:]
+        target_states["wrist_vel"] = self.target_wrist_vel_seq[env_ids, self.target_jt_j, :3]
+        target_states["wrist_ang_vel"] = self.target_wrist_vel_seq[env_ids, self.target_jt_j, 3:]
+        target_states["joints_pos"] = self.target_body_pos_seq[env_ids, self.target_jt_j, 1:, :3]
+        target_states["joints_vel"] = self.target_body_vel_seq[env_ids, self.target_jt_j, 1:, :3]
+        target_states["manip_obj_pos"] = self.target_obj_pos_seq[env_ids, self.target_jt_j, :3]
+        target_states["manip_obj_quat"] = self.target_obj_pos_seq[env_ids, self.target_jt_j, 3:]
+        target_states["manip_obj_vel"] = self.target_obj_vel_seq[env_ids, self.target_jt_j, :3]
+        target_states["manip_obj_ang_vel"] = self.target_obj_vel_seq[env_ids, self.target_jt_j, 3:]
 
+        target_states["power"] = torch.abs(torch.multiply(self.dof_torque, self.dof_vel)).sum(dim=-1)
         wrist_power = torch.abs(torch.sum(self.actions[:, :3] * self.wrist_vel[:, :3], dim=-1))
         wrist_power += torch.abs(torch.sum(self.actions[:, 3:6] * self.wrist_vel[:, 3:], dim=-1))
         target_states["wrist_power"] = wrist_power
@@ -470,13 +469,13 @@ class ShandImitator(DirectRLEnv):
             raise NotImplementedError
 
         (
-            self.reward_buf[:],
+            self.reward_buf,
             self.reset_buf[:],
             self.reset_time_outs[:],
             self.reset_terminated[:],
             reward_dict,
             self.error_buf,
-        ) = compute_rewards(
+        ) = compute_imitation_reward(
             self.reset_buf,
             self.target_jt_j,
             self.running_frame_len,
@@ -527,7 +526,7 @@ class ShandImitator(DirectRLEnv):
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         self._compute_intermediate_values()
-        time_out = self.target_jt_j >= self.traj_len[self.target_jt_i]
+        time_out = self.target_jt_j >= self.traj_len_seq
 
         died = - self.eepose_error > 0.15
         return died, time_out
@@ -538,7 +537,7 @@ class ShandImitator(DirectRLEnv):
         self.robot.reset(env_ids)
         super()._reset_idx(env_ids)
 
-        joint_pos = self.target_joint_pos_seq[env_ids, self.target_jt_j]
+        joint_pos = self.target_joint_pos_seq[env_ids, self.target_jt_j[env_ids]]
         joint_vel = self.robot.data.default_joint_vel[env_ids]
         
         default_root_state = self.robot.data.default_root_state[env_ids]
@@ -549,7 +548,7 @@ class ShandImitator(DirectRLEnv):
         # this can only be turned on if robot joint is corrected
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
 
-        obj_pos = self.target_obj_pos_seq[env_ids, self.target_jt_j]
+        obj_pos = self.target_obj_pos_seq[env_ids, self.target_jt_j[env_ids]]
         obj_pos[:, :3] += self.scene.env_origins[env_ids]
         obj_vel = self.object.data.default_root_state[env_ids, 7:]
 
@@ -596,8 +595,8 @@ class ShandImitator(DirectRLEnv):
             self.scene.update(dt=self.physics_dt)
 
         # Visualize Markers
-        self.ee_marker.visualize(self.eepose[:, 0:3] + self.scene.env_origins, self.eepose[:, 3:7])
-        self.goal_marker.visualize(self.target_eepose[:, 0:3] + self.scene.env_origins, self.target_eepose[:, 3:7])
+        # self.ee_marker.visualize(self.eepose[:, 0:3] + self.scene.env_origins, self.eepose[:, 3:7])
+        # self.goal_marker.visualize(self.target_eepose[:, 0:3] + self.scene.env_origins, self.target_eepose[:, 3:7])
 
         # post-step:
         # -- update env counters (used for curriculum generation)
@@ -675,6 +674,144 @@ def compute_rewards(
 
 @torch.jit.script
 def compute_imitation_reward(
+    reset_buf: Tensor,
+    progress_buf: Tensor,
+    running_progress_buf: Tensor,
+    actions: Tensor,
+    states: Dict[str, Tensor],
+    target_states: Dict[str, Tensor],
+    max_length: List[int],
+    scale_factor: float,
+    dexhand_weight_idx: Dict[str, List[int]],
+) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+
+    # type: (Tensor, Tensor, Tensor, Tensor, Dict[str, Tensor], Dict[str, Tensor], Tensor, float, Dict[str, List[int]]) -> Tuple[Tensor, Tensor, Tensor, Tensor, Dict[str, Tensor], Tensor]
+
+    # end effector pose reward
+    current_eef_pos = states["base_state"][:, :3]
+    current_eef_quat = states["base_state"][:, 3:7]
+
+    target_eef_pos = target_states["wrist_pos"]
+    target_eef_quat = target_states["wrist_quat"]
+    diff_eef_pos = target_eef_pos - current_eef_pos
+    diff_eef_pos_dist = torch.norm(diff_eef_pos, dim=-1)
+
+    current_eef_vel = states["base_state"][:, 7:10]
+    current_eef_ang_vel = states["base_state"][:, 10:13]
+    target_eef_vel = target_states["wrist_vel"]
+    target_eef_ang_vel = target_states["wrist_ang_vel"]
+
+    diff_eef_vel = target_eef_vel - current_eef_vel
+    diff_eef_ang_vel = target_eef_ang_vel - current_eef_ang_vel
+
+    joints_pos = states["joints_state"][:, 1:, :3]
+    target_joints_pos = target_states["joints_pos"]
+    diff_joints_pos = target_joints_pos - joints_pos
+    diff_joints_pos_dist = torch.norm(diff_joints_pos, dim=-1)
+
+    # ? assign different weights to different joints
+    diff_thumb_tip_pos_dist = diff_joints_pos_dist[:, [k - 1 for k in dexhand_weight_idx["thumb_tip"]]].mean(dim=-1)
+    diff_index_tip_pos_dist = diff_joints_pos_dist[:, [k - 1 for k in dexhand_weight_idx["index_tip"]]].mean(dim=-1)
+    diff_middle_tip_pos_dist = diff_joints_pos_dist[:, [k - 1 for k in dexhand_weight_idx["middle_tip"]]].mean(dim=-1)
+    diff_ring_tip_pos_dist = diff_joints_pos_dist[:, [k - 1 for k in dexhand_weight_idx["ring_tip"]]].mean(dim=-1)
+    diff_pinky_tip_pos_dist = diff_joints_pos_dist[:, [k - 1 for k in dexhand_weight_idx["pinky_tip"]]].mean(dim=-1)
+    diff_level_1_pos_dist = diff_joints_pos_dist[:, [k - 1 for k in dexhand_weight_idx["level_1_joints"]]].mean(dim=-1)
+    diff_level_2_pos_dist = diff_joints_pos_dist[:, [k - 1 for k in dexhand_weight_idx["level_2_joints"]]].mean(dim=-1)
+
+    joints_vel = states["joints_state"][:, 1:, 7:10]
+    target_joints_vel = target_states["joints_vel"]
+    diff_joints_vel = target_joints_vel - joints_vel
+
+    reward_eef_pos = torch.exp(-40 * diff_eef_pos_dist)
+    reward_thumb_tip_pos = torch.exp(-100 * diff_thumb_tip_pos_dist)
+    reward_index_tip_pos = torch.exp(-90 * diff_index_tip_pos_dist)
+    reward_middle_tip_pos = torch.exp(-80 * diff_middle_tip_pos_dist)
+    reward_pinky_tip_pos = torch.exp(-60 * diff_pinky_tip_pos_dist)
+    reward_ring_tip_pos = torch.exp(-60 * diff_ring_tip_pos_dist)
+    reward_level_1_pos = torch.exp(-50 * diff_level_1_pos_dist)
+    reward_level_2_pos = torch.exp(-40 * diff_level_2_pos_dist)
+
+    reward_eef_vel = torch.exp(-1 * diff_eef_vel.abs().mean(dim=-1))
+    reward_eef_ang_vel = torch.exp(-1 * diff_eef_ang_vel.abs().mean(dim=-1))
+    reward_joints_vel = torch.exp(-1 * diff_joints_vel.abs().mean(dim=-1).mean(-1))
+
+    current_dof_pos = states["q"]
+    current_dof_vel = states["dq"]
+
+    diff_eef_rot = quat_mul(target_eef_quat, quat_conjugate(current_eef_quat))
+    diff_eef_rot_angle = quat_to_angle_axis(diff_eef_rot)[0]
+    reward_eef_rot = torch.exp(-1 * (diff_eef_rot_angle).abs())
+
+    reward_power = torch.exp(-10 * target_states["power"])
+    reward_wrist_power = torch.exp(-2 * target_states["wrist_power"])
+
+    error_buf = (
+        (torch.norm(current_eef_vel, dim=-1) > 100)
+        | (torch.norm(current_eef_ang_vel, dim=-1) > 200)
+        | (torch.norm(joints_vel, dim=-1).mean(-1) > 100)
+        | (torch.abs(current_dof_vel).mean(-1) > 200)
+    )  # sanity check
+
+    failed_execute = (
+        (
+            (diff_thumb_tip_pos_dist > 0.04 / 0.7 * scale_factor)
+            | (diff_index_tip_pos_dist > 0.045 / 0.7 * scale_factor)
+            | (diff_middle_tip_pos_dist > 0.05 / 0.7 * scale_factor)
+            | (diff_pinky_tip_pos_dist > 0.06 / 0.7 * scale_factor)
+            | (diff_ring_tip_pos_dist > 0.06 / 0.7 * scale_factor)
+            | (diff_level_1_pos_dist > 0.07 / 0.7 * scale_factor)
+            | (diff_level_2_pos_dist > 0.08 / 0.7 * scale_factor)
+        )
+        & (running_progress_buf >= 20)
+    ) | error_buf
+    reward_execute = (
+        0.1 * reward_eef_pos
+        + 0.6 * reward_eef_rot
+        + 0.9 * reward_thumb_tip_pos
+        + 0.8 * reward_index_tip_pos
+        + 0.75 * reward_middle_tip_pos
+        + 0.6 * reward_pinky_tip_pos
+        + 0.6 * reward_ring_tip_pos
+        + 0.5 * reward_level_1_pos
+        + 0.3 * reward_level_2_pos
+        + 0.1 * reward_eef_vel
+        + 0.05 * reward_eef_ang_vel
+        + 0.1 * reward_joints_vel
+        + 0.5 * reward_power
+        + 0.5 * reward_wrist_power
+    )
+
+    succeeded = (
+        progress_buf + 1 + 3 >= max_length
+    ) & ~failed_execute  # reached the end of the trajectory, +3 for max future 3 steps
+    reset_buf = torch.where(
+        succeeded | failed_execute,
+        torch.ones_like(reset_buf),
+        reset_buf,
+    )
+    reward_dict = {
+        "reward_eef_pos": reward_eef_pos,
+        "reward_eef_rot": reward_eef_rot,
+        "reward_eef_vel": reward_eef_vel,
+        "reward_eef_ang_vel": reward_eef_ang_vel,
+        "reward_joints_vel": reward_joints_vel,
+        "reward_joints_pos": (
+            reward_thumb_tip_pos
+            + reward_index_tip_pos
+            + reward_middle_tip_pos
+            + reward_pinky_tip_pos
+            + reward_ring_tip_pos
+            + reward_level_1_pos
+            + reward_level_2_pos
+        ),
+        "reward_power": reward_power,
+        "reward_wrist_power": reward_wrist_power,
+    }
+
+    return reward_execute, reset_buf, succeeded, failed_execute, reward_dict, error_buf
+
+@torch.jit.script
+def compute_manipulation_reward(
     reset_buf: Tensor,
     progress_buf: Tensor,
     running_progress_buf: Tensor,

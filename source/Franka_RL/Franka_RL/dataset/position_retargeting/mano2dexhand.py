@@ -31,16 +31,35 @@ np.unicode = np.unicode_
 def mano2dexhand(dataset: str, data_root: Path, robots: Optional[List[str]]):
     for robot in robots:
         dexhand = RobotFactory.create_robot(robot)
-        dataset = DataFactory.create_data(dataset, data_path=data_root, dexhand=dexhand)
+        dataset = DataFactory.create_data(dataset, data_path=data_root, dexhand=dexhand, skip=5)
         viewer = RobotHandDatasetSAPIENViewer([dexhand], HandType.right if dexhand.side == "right" else HandType.left, headless=True, use_ray_tracing=True)
 
-        # Data ID, feel free to change it to visualize different trajectory
+        # Data ID, feel free to change it to visualize different trajectory,
         data_id_available = dataset.available_index()
+        print(f"Load {len(data_id_available)} trajectories")
 
-        sampled_data = dataset[data_id_available[0]]
+        skip = 0
+
+        for i in range(0, len(data_id_available)):
+            idx = data_id_available[i]
+            if(idx == "667a8@2"):
+                skip = i + 1
+                break
+
+        for i in range(skip, len(data_id_available)):
+            print(f"Processing data: {idx}")
+            idx = data_id_available[i]
+            sampled_data = dataset[idx]
+            if(sampled_data is None):
+                print(f"Can't find the object in data: {idx}!")
+                continue
+
         
-        viewer.load_object_hand(sampled_data)
-        viewer.render_data(sampled_data, fps=dataset.fps, record_traj=True)
+            viewer.load_object_hand(sampled_data)
+            viewer.render_data(sampled_data, fps=dataset.fps, record_traj=True)
+
+            print(f"Processing data: {idx}")
+
 
 
 def main(dataset: str, dataset_dir: str, robots: Optional[List[str]] = None):
@@ -56,9 +75,9 @@ def main(dataset: str, dataset_dir: str, robots: Optional[List[str]] = None):
     """
     data_root = Path(dataset_dir).absolute()
     if not data_root.exists():
-        raise ValueError(f"Path to DexYCB dir: {data_root} does not exist.")
+        raise ValueError(f"Path to dataset dir: {data_root} does not exist.")
     else:
-        print(f"Using DexYCB dir: {data_root}")
+        print(f"Using dataset dir: {data_root}")
 
     mano2dexhand(dataset, data_root, robots)
 

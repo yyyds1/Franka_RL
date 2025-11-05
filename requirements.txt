@@ -1,4 +1,5 @@
 dex_retargeting
+coacd
 chumpy
 opencv-python
 tyro

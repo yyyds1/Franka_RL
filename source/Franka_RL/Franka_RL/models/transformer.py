@@ -155,6 +155,8 @@ class Transformer(nn.Module):
                 # Add a sequence dimension
                 key_obs = key_obs.unsqueeze(1)
 
+            key_obs = key_obs.reshape(key_obs.shape[0], -1, self.config.latent_dim) # [seq_len, 1, bs * d] -> [seq_len, bs, d]
+
             cat_obs.append(key_obs)
 
             if self.mask_keys[model_name] is not None:

@@ -56,7 +56,7 @@ from isaaclab_assets import (
     SAWYER_CFG,
 )
 
-from Franka_RL.robots import DexHandFactory
+from Franka_RL.robots import RobotFactory
 
 # isort: on
 
@@ -102,7 +102,7 @@ def design_scene() -> tuple[dict, list[list[float]]]:
     # shand_cfg = SHAND_CFG.replace(prim_path="/World/Origin1/Robot")
     # shand = Articulation(cfg=shand_cfg)
 
-    dexhand = DexHandFactory.create_hand('shadow')
+    dexhand = RobotFactory.create_robot('shadow_rh')
     robot_cfg = ArticulationCfg(
         prim_path="/World/Origin1/Robot",
         spawn=sim_utils.UsdFileCfg(

@@ -132,13 +132,14 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
                 start_frame = i
                 break
 
-        if self.headless:
-            robot_names = self.robot_names.copy()
-            robot_names = "_".join(robot_names)
-            video_path = Path(__file__).parent.resolve() / f"data/{robot_names}_video.mp4"
-            writer = cv2.VideoWriter(
-                str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (self.camera.get_width(), self.camera.get_height())
-            )
+        # if self.headless:
+        #     robot_names = self.robot_names.copy()
+        #     robot_names = "_".join(robot_names)
+        #     video_path = Path(__file__).parent.resolve() / f"data/{robot_names}_video.mp4"
+        #     os.makedirs(os.path.dirname(video_path), exist_ok=True)
+        #     writer = cv2.VideoWriter(
+        #         str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (self.camera.get_width(), self.camera.get_height())
+        #     )
 
         if record_traj:
             save_data = {}
@@ -156,20 +157,21 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
         for i in trange(start_frame, num_frame):
             object_pose_frame = object_pose[i]
             hand_pose_frame = hand_pose[i]
-            vertex, joint = self._compute_hand_geometry(hand_pose_frame)
+            # vertex, joint = self._compute_hand_geometry(hand_pose_frame)
+            vertex, joint = data["mano_vertex"][i], data["mano_joints"][i]
 
             # Update poses for YCB objects
             for k in range(num_objects):
                 pos_quat = object_pose_frame[k]
 
                 # Quaternion convention: xyzw -> wxyz
-                pose = self.camera_pose * sapien.Pose(pos_quat[4:], np.concatenate([pos_quat[3:4], pos_quat[:3]]))
+                pose = self.camera_pose * sapien.Pose(pos_quat[:3], pos_quat[3:])
                 self.objects[k].set_pose(pose)
                 for copy_ind in range(num_copy):
                     self.objects[k + copy_ind * num_objects].set_pose(pose_offsets[copy_ind] * pose)
 
             # Update pose for human hand
-            self._update_hand(vertex)
+            # self._update_hand(vertex)
 
             # Update poses for robot hands
             for robot, retargeting, retarget2sapien in zip(self.robots, self.retargetings, self.retarget2sapien):
@@ -179,20 +181,19 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
                 robot.set_qpos(qpos)
 
             self.scene.update_render()
-            if self.headless:
-                self.camera.take_picture()
-                rgb = self.camera.get_picture("Color")[..., :3]
-                rgb = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
-                writer.write(rgb[..., ::-1])
-            else:
-                for _ in range(step_per_frame):
-                    self.viewer.render()
+            # if self.headless:
+            #     self.camera.take_picture()
+            #     rgb = self.camera.get_picture("Color")[..., :3]
+            #     rgb = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
+            #     writer.write(rgb[..., ::-1])
+            # else:
+            #     for _ in range(step_per_frame):
+            #         self.viewer.render()
 
             if record_traj:
                 for robot, dexhand, copy_ind in zip(self.robots, self.dexhands, list(range(1, num_copy))):
                     
-                    save_data[dexhand.name]["wrist_pos"][i - start_frame, :3] = robot.root_pose.p - pose_offsets[copy_ind].p
-                    save_data[dexhand.name]["wrist_pos"][i - start_frame, 3:] = robot.root_pose.q
+                    
                     
                     def get_indices(list1: List, list2: List):
                         return [list2.index(element) for element in list1]
@@ -201,7 +202,8 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
                     
                     body_pos = np.array([np.concatenate([link.pose.p, link.pose.q], axis=-1) for link in robot.links], dtype=np.float32)
                     save_data[dexhand.name]["body_pos"][i - start_frame] = body_pos[get_indices(dexhand.body_names, [link.name for link in robot.links])]
-                    
+                    save_data[dexhand.name]["wrist_pos"][i - start_frame] = body_pos[get_indices([dexhand.wrist_name], [link.name for link in robot.links])].squeeze()
+
                     obj_pos = self.objects[copy_ind * num_objects].pose
                     save_data[dexhand.name]["obj_pose"][i - start_frame, :3] = obj_pos.p - pose_offsets[copy_ind].p
                     save_data[dexhand.name]["obj_pose"][i - start_frame, 3:] = obj_pos.q
@@ -213,17 +215,21 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
         
         if record_traj:
             for dexhand in self.dexhands:
-                save_data[dexhand.name]["wrist_vel"][:, :3] = DexhandData.compute_velocity(save_data[dexhand.name]["wrist_pos"][:, :3], time_delta=1/fps)
-                save_data[dexhand.name]["wrist_vel"][:, 3:] = DexhandData.compute_angular_velocity(quat_to_rotmat(data[dexhand.name]["wrist_pos"][:, 3:]))
-                save_data[dexhand.name]["body_vel"][:, :3] = DexhandData.compute_velocity(data[dexhand.name]["body_pos"][:, :, :3])
-                save_data[dexhand.name]["body_vel"][:, 3:] = DexhandData.compute_angular_velocity(quat_to_rotmat(data[dexhand.name]["body_pos"][:, :, 3:]))
+                # save_data[dexhand.name]["wrist_vel"][:, :3] = DexhandData.compute_velocity(torch.tensor(save_data[dexhand.name]["wrist_pos"][:, :3]), time_delta=1/fps).numpy()
+                # save_data[dexhand.name]["wrist_vel"][:, 3:] = DexhandData.compute_angular_velocity(quat_to_rotmat(torch.tensor(save_data[dexhand.name]["wrist_pos"][:, 3:])), time_delta=1/fps).numpy()
+                save_data[dexhand.name]["body_vel"][:, :, :3] = DexhandData.compute_velocity(torch.tensor(save_data[dexhand.name]["body_pos"][:, :, :3]), time_delta=1 / fps).numpy()
+                save_data[dexhand.name]["body_vel"][:, :, 3:] = DexhandData.compute_angular_velocity(quat_to_rotmat(torch.tensor(save_data[dexhand.name]["body_pos"][:, :, 3:])), time_delta=1/fps).numpy()
+                save_data[dexhand.name]["wrist_vel"] = save_data[dexhand.name]["body_vel"][:, dexhand.body_names.index(dexhand.wrist_name)]
+                save_data[dexhand.name]["obj_vel"][:, :3] = DexhandData.compute_velocity(torch.tensor(save_data[dexhand.name]["obj_pose"][:, :3]), time_delta=1 / fps).numpy()
+                save_data[dexhand.name]["obj_vel"][:, 3:] = DexhandData.compute_angular_velocity(quat_to_rotmat(torch.tensor(save_data[dexhand.name]["obj_pose"][:, 3:])).unsqueeze(1), time_delta=1 / fps).squeeze().numpy()
 
                 save_file = f"{data['capture_name']}_{dexhand.name}.json"
                 save_path = os.path.join(data["data_dir"], "retargeting_result", save_file)
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-                for key, val in data[dexhand.name].items():
-                    if type(val) is torch.Tensor:
-                        save_data[dexhand.name][key] = val.to_list()
+                for key, val in save_data[dexhand.name].items():
+                    if type(val) is np.ndarray:
+                        save_data[dexhand.name][key] = val.tolist()
 
                 with open(save_path, mode='w', encoding='utf-8') as f:
                     json.dump(save_data[dexhand.name], f, indent=4)
@@ -232,5 +238,5 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
         if not self.headless:
             self.viewer.paused = True
             self.viewer.render()
-        else:
-            writer.release()
+        # else:
+            # writer.release()
