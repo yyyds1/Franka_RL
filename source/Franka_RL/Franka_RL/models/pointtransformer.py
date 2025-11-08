@@ -248,7 +248,8 @@ class PointTransformerEnc(nn.Module):
         logger.info(f'Load pretrained scene model: {weigth_path}')
 
 def pointtransformer_enc_repro(**kwargs) -> PointTransformerEnc:
-    model = PointTransformerEnc(PointTransformerBlock, [2, 3, 4, 6, 3], **kwargs)
+    config = {}
+    model = PointTransformerEnc(config, PointTransformerBlock, [2, 3, 4, 6, 3], **kwargs)
     return model
 
 

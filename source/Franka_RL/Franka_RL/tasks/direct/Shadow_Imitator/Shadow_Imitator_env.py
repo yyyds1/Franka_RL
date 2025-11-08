@@ -34,6 +34,7 @@ from isaaclab.sensors import Camera
 from .Shadow_Imitator_env_cfg import ShandImitatorEnvCfg
 from Franka_RL.robots import RobotFactory
 from Franka_RL.dataset import DataFactory
+from Franka_RL.models.pointtransformer import pointtransformer_enc_repro
 
 def normalize_angle(x):
     return torch.atan2(torch.sin(x), torch.cos(x))
@@ -76,11 +77,11 @@ class ShandImitatorEnv(DirectRLEnv):
         self.dataset.load_data()
         self.traj_num = self.dataset.data["traj_num"]
         self.traj_len_max = self.dataset.data["max_traj_length"]
-
-        if self.cfg.human_resample_on_env_reset:
-            self.target_jt_i = torch.randint(0, self.traj_num, (self.num_envs, )).to(dtype=torch.int, device=self.device)
-        else:
-            self.target_jt_i = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
+        self.target_jt_i = torch.randint(0, self.traj_num, (self.num_envs, )).to(dtype=torch.int, device=self.device)
+        # if self.cfg.human_resample_on_env_reset:
+        #     self.target_jt_i = torch.randint(0, self.traj_num, (self.num_envs, )).to(dtype=torch.int, device=self.device)
+        # else:
+        #     self.target_jt_i = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
 
         self.traj_len_seq = self.dataset.data["traj_len"][self.target_jt_i]
         self.target_wrist_pos_seq = self.dataset.data["wrist_pos"][self.target_jt_i]
@@ -94,8 +95,40 @@ class ShandImitatorEnv(DirectRLEnv):
         self.target_tip_distance_seq = self.dataset.data["tip_distance"][self.target_jt_i]
         self.obj_id_seq = self.dataset.data["obj_id"]
         
-        self.target_jt_j = (torch.rand(self.num_envs).to(dtype=torch.float32, device=self.device) * self.traj_len_seq).to(torch.int64)
+        self.target_jt_j = (torch.rand(self.num_envs).to(dtype=torch.float32, device=self.device) * (self.traj_len_seq - 1)).to(torch.int64)
         self.running_frame_len = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
+
+        def point_encoder(obj_verts: torch.Tensor, batch_size: int = 64):
+            # load point transformer encoder
+            pointtransformer = pointtransformer_enc_repro(c=6)
+            pointtransformer.load_pretrained_weight(self.cfg.encoder_checkpoint)
+            pointtransformer = pointtransformer.cuda()
+            
+            print(f"Point numbers: {obj_verts.shape[1]}")
+            print("Start encoding objects point cloud with transformer...")
+            
+            if(self.num_envs <= batch_size):
+                p = obj_verts.view(obj_verts.shape[0], -1)
+                with torch.no_grad():
+                    obj_feature = pointtransformer(p)
+                obj_feature =  obj_feature.reshape(obj_verts.shape[0], -1)
+                print(f"Encoding Finished. Object feature dim: {obj_feature.shape[1]}")
+                return obj_feature
+            else:
+                # sub_batches = [obj_verts[i: i + batch_size] for i in range(0, self.num_envs, batch_size)]
+                obj_feature = torch.tensor([]).to(device=self.device)
+                for i in range(0, self.num_envs, batch_size):
+                    p = obj_verts[i: i + batch_size].view(batch_size, -1)
+                    with torch.no_grad():
+                        sub_feature= pointtransformer(p)
+                    sub_feature = sub_feature.reshape(batch_size, -1)
+                    obj_feature = torch.cat((obj_feature, sub_feature), dim=0)
+                
+                print(f"Encoding Finished. Object feature dim: {obj_feature.shape[1]}")
+                return obj_feature
+        
+        
+        self.obj_feature = point_encoder(self.obj_pcl_seq)
 
         # self.target_wrist_pos = self.target_wrist_pos_seq[:, self.target_jt_j]
         # self.target_wrist_vel = self.target_wrist_vel_seq[:, self.target_jt_j]
@@ -124,9 +157,9 @@ class ShandImitatorEnv(DirectRLEnv):
                 self.target_obj_pos_seq[reset_env_ids] = self.dataset.data["obj_pose"][self.target_jt_i[reset_env_ids]]
                 self.target_obj_vel_seq[reset_env_ids] = self.dataset.data["obj_vel"][self.target_jt_i[reset_env_ids]]
                 self.target_tip_distance_seq[reset_env_ids] = self.dataset.data["tip_distance"][self.target_jt_i[reset_env_ids]]
-                self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len_seq[reset_env_ids]).to(torch.int64)
+                self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * (self.traj_len_seq[reset_env_ids] - 1)).to(torch.int64)
             else:
-                self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len_seq[reset_env_ids]).to(torch.int64)
+                self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * (self.traj_len_seq[reset_env_ids] - 1)).to(torch.int64)
                 self.running_frame_len[reset_env_ids] = 0
                 # self.target_jt = self.target_jt_seq[self.target_jt_i, self.target_jt_j]
                 # self.target_eepose = self.target_eepose_seq[self.target_jt_i, self.target_jt_j]
@@ -178,10 +211,12 @@ class ShandImitatorEnv(DirectRLEnv):
         self._init_traj()
 
         # create object
+        obj_usd_list = [self.dataset.data["obj_usd"][idx] for idx in self.target_jt_i]
+
         object_cfg = RigidObjectCfg(
             prim_path="/World/envs/env_.*/obj",
             spawn=sim_utils.MultiUsdFileCfg(
-                usd_path=self.dataset.data["obj_usd"],
+                usd_path=obj_usd_list,
                 random_choice=False,
                 scale=(1.00, 1.00, 1.00),
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -297,8 +332,8 @@ class ShandImitatorEnv(DirectRLEnv):
         # target state
         next_target_state = {}
         cur_idx = self.target_jt_j + 1
-        cur_idx = torch.clamp(cur_idx, torch.zeros_like(self.traj_len_seq), self.traj_len_seq - 1)
         cur_idx = torch.stack([cur_idx + t for t in range(self.obs_future_length)], dim=-1)
+        cur_idx = torch.clamp(cur_idx, torch.zeros_like(self.traj_len_seq).unsqueeze(1), (self.traj_len_seq - 1).unsqueeze(1))
         nE, nT = self.target_wrist_pos_seq.shape[:2]
         nF = self.obs_future_length
 
@@ -372,7 +407,8 @@ class ShandImitatorEnv(DirectRLEnv):
 
         next_target_state["gt_tips_distance"] = indicing(self.target_tip_distance_seq, cur_idx).reshape(nE, -1) # 1
 
-        next_target_state["obj_pcl"] = self.obj_curr_pcl.reshape(nE, -1)
+        # next_target_state["obj_pcl"] = self.obj_curr_pcl.reshape(nE, -1)
+        next_target_state["obj_feature"] = self.obj_feature.reshape(nE, -1)
 
         obs = torch.cat(
             [
@@ -386,7 +422,7 @@ class ShandImitatorEnv(DirectRLEnv):
                     "obj_trans",
                     "obj_vel",
                     "tip_force",
-                    "obj_com",
+                    # "obj_com",
                     "obj_gravity",
                 ]
             ] + [
@@ -411,7 +447,8 @@ class ShandImitatorEnv(DirectRLEnv):
                     "delta_manip_obj_ang_vel",
                     "obj_to_joints",
                     "gt_tips_distance",
-                    "obj_pcl",
+                    # "obj_pcl",
+                    "obj_feature",
                 ]
             ],
             dim=-1,
@@ -541,6 +578,7 @@ class ShandImitatorEnv(DirectRLEnv):
         joint_vel = self.robot.data.default_joint_vel[env_ids]
         
         default_root_state = self.robot.data.default_root_state[env_ids]
+        default_root_state[:, :7] = self.target_wrist_pos_seq[env_ids, self.target_jt_j[env_ids]]
         default_root_state[:, :3] += self.scene.env_origins[env_ids]
         
         self.robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)

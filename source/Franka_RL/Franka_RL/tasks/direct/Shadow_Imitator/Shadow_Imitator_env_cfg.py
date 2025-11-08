@@ -28,8 +28,8 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     action_rot_scale = 20
     action_moving_scale = 1.0
     action_space = 28
-    observation_space = 7772
-    state_space = 7772
+    observation_space = 5721
+    state_space = 5721
 
     future_frame = 5
 
@@ -92,3 +92,5 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
 
     angular_velocity_scale: float = 0.25
     contact_force_scale: float = 0.01
+
+    encoder_checkpoint = 'ckpt/pointtransformer.pth'
