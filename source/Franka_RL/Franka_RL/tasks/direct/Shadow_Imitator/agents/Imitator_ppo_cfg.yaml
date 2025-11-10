@@ -140,8 +140,8 @@ policy:
               use_layer_norm: false
 
 clip_actions: null
-save_interval: 500
-experiment_name: Franka_Train
+save_interval: 100
+experiment_name: Shand_Imitator
 run_name: ''
 logger: tensorboard
 neptune_project: isaaclab
