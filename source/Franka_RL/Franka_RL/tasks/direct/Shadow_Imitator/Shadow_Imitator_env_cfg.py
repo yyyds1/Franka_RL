@@ -24,8 +24,8 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     # decimation: Number of control action updates @ sim DT per policy DT
     decimation = 4
     action_joint_scale = 0.1
-    action_pos_scale = 500
-    action_rot_scale = 20
+    action_pos_scale = 5
+    action_rot_scale = 0.2
     action_moving_scale = 1.0
     action_space = 28
     observation_space = 5721
@@ -36,7 +36,7 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     # for h1 shadow
     num_dof = 30
     human_delay = 0.0  # delay in seconds
-    human_freq = 5
+    human_freq = 24
     human_resample_on_env_reset = False
     human_filename = "reorderd_ACCAD_walk_10fps.npy"
     

@@ -18,7 +18,7 @@ This repository provides RL framework for Dexhand and robotics arm manipulation 
     conda activate frankarl
     ```
 
-- Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
+- Install __Isaac Lab release 2.2.0__ by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
   We recommend using the conda installation as it simplifies calling Python scripts from the terminal.
 
 - Using a python interpreter that has Isaac Lab installed, install the dependences and the library in editable mode using:

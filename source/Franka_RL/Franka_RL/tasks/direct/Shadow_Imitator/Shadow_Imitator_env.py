@@ -12,9 +12,7 @@ from torch import nn
 import torch.nn.functional as F
 import os
 import random
-import pendulum
 import json
-import zarr
 from collections.abc import Sequence
 from typing import Dict, List, Tuple
 from torch import Tensor
@@ -230,7 +228,7 @@ class ShandImitatorEnv(DirectRLEnv):
                     stabilization_threshold=0.0025,
                     max_depenetration_velocity=1000.0,
                 ),
-                # collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+                collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
                 mass_props=sim_utils.MassPropertiesCfg(mass=0.05, density=0.0),
                 activate_contact_sensors=True,
             ),
@@ -274,8 +272,26 @@ class ShandImitatorEnv(DirectRLEnv):
         # Markers
         # frame_marker_cfg = FRAME_MARKER_CFG.copy()
         # frame_marker_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
-        # self.ee_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_current"))
-        # self.goal_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_goal"))
+        red_marker_cfg = VisualizationMarkersCfg(
+            prim_path="/World/Visuals/testMarkers",
+            markers={
+                "marker": sim_utils.SphereCfg(
+                    radius=0.005,
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
+                ),
+            }
+        )
+        green_marker_cfg = VisualizationMarkersCfg(
+            prim_path="/World/Visuals/testMarkers",
+            markers={
+                "marker": sim_utils.SphereCfg(
+                    radius=0.005,
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
+                ),
+            }
+        )
+        self.body_pos_marker = VisualizationMarkers(red_marker_cfg.replace(prim_path="/Visuals/body_pos"))
+        self.target_body_pos_marker = VisualizationMarkers(green_marker_cfg.replace(prim_path="/Visuals/target_body_pos"))
 
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
@@ -294,8 +310,26 @@ class ShandImitatorEnv(DirectRLEnv):
     def _apply_action(self) -> None:
         self.robot.set_external_force_and_torque(forces=self.actions[:, :3].unsqueeze(1), torques=self.actions[:, 3:6].unsqueeze(1), body_ids=[self.robot.body_names.index(self.dexhand.wrist_name)])
         self.robot.set_joint_position_target(self.actions[:, 6:], joint_ids=range(0, self.dexhand.n_dofs))
-        # self.robot.set_joint_position_target(self.actions, joint_ids=range(0, 7))
-        # self.robot.set_jointset_joint_effort_target(self.actions, joint_ids=range(0, 7))
+
+        # env_ids = torch.arange(self.num_envs).to(device=self.device)
+        # joint_pos = self.target_joint_pos_seq[env_ids, self.target_jt_j[env_ids]]
+        # joint_vel = self.robot.data.default_joint_vel[env_ids]
+        
+        # default_root_state = self.robot.data.default_root_state[env_ids]
+        # default_root_state[:, :7] = self.target_wrist_pos_seq[env_ids, self.target_jt_j[env_ids]]
+        # default_root_state[:, :3] += self.scene.env_origins[env_ids]
+        
+        # self.robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
+        # self.robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
+        # # this can only be turned on if robot joint is corrected
+        # self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+
+        # obj_pos = self.target_obj_pos_seq[env_ids, self.target_jt_j[env_ids]]
+        # obj_pos[:, :3] += self.scene.env_origins[env_ids]
+        # obj_vel = self.object.data.default_root_state[env_ids, 7:]
+
+        # self.object.write_root_pose_to_sim(obj_pos, env_ids)
+        # self.object.write_root_velocity_to_sim(obj_vel, env_ids)
 
     def _compute_intermediate_values(self):
         self.dof_pos, self.dof_vel = self.robot.data.joint_pos, self.robot.data.joint_vel
@@ -310,6 +344,9 @@ class ShandImitatorEnv(DirectRLEnv):
         self.obj_vel = self.object.data.root_state_w[:, 7:]
         self.obj_com_pos = transform_points(self.object.data.body_com_pos_b, self.obj_pos[:, :3], self.obj_pos[:, 3:]).squeeze()
         self.obj_curr_pcl = transform_points(self.obj_pcl_seq, self.obj_pos[:, :3], self.obj_pos[:, 3:])
+
+        # For Markers 
+        self.target_body_pos_w = self.target_body_pos_seq[torch.arange(self.num_envs).to(device=self.device), self.target_jt_j] + F.pad(self.scene.env_origins, (0, 4)).repeat(1, self.dexhand.n_bodies).view(self.num_envs, self.dexhand.n_bodies, 7)
         
 
     def _get_observations(self) -> dict:
@@ -524,6 +561,9 @@ class ShandImitatorEnv(DirectRLEnv):
             self.dexhand.weight_idx,
         )
 
+
+        self.reset_terminated = torch.zeros_like(self.reset_terminated).to(torch.bool)
+        self.reset_buf = self.reset_terminated | self.reset_time_outs
         for rew, val in reward_dict.items():
             self._log_reward("Episode_Reward/" + rew, val)
 
@@ -633,8 +673,8 @@ class ShandImitatorEnv(DirectRLEnv):
             self.scene.update(dt=self.physics_dt)
 
         # Visualize Markers
-        # self.ee_marker.visualize(self.eepose[:, 0:3] + self.scene.env_origins, self.eepose[:, 3:7])
-        # self.goal_marker.visualize(self.target_eepose[:, 0:3] + self.scene.env_origins, self.target_eepose[:, 3:7])
+        self.body_pos_marker.visualize(self.robot.data.body_state_w[:, :, :3].reshape(-1, 3), self.robot.data.body_state_w[:, :, 3:7].reshape(-1, 4))
+        self.target_body_pos_marker.visualize(self.target_body_pos_w[:, :, :3].reshape(-1, 3), self.target_body_pos_w[:, :, 3:7].reshape(-1, 4))
 
         # post-step:
         # -- update env counters (used for curriculum generation)
@@ -819,9 +859,12 @@ def compute_imitation_reward(
         + 0.5 * reward_wrist_power
     )
 
+    # succeeded = (
+    #     progress_buf + 1 + 3 >= max_length
+    # ) & ~failed_execute  # reached the end of the trajectory, +3 for max future 3 steps
     succeeded = (
         progress_buf + 1 + 3 >= max_length
-    ) & ~failed_execute  # reached the end of the trajectory, +3 for max future 3 steps
+    )
     reset_buf = torch.where(
         succeeded | failed_execute,
         torch.ones_like(reset_buf),

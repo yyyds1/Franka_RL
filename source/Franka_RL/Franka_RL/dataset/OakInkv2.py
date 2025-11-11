@@ -35,18 +35,6 @@ class OakInkv2DatasetRH(DexhandData):
         self.seq_hashes = {os.path.split(p)[-1].split("_")[5][:5]: i for i, p in enumerate(pathes)}
         self.fps = 120 / self.skip
 
-        SMPLX_ROT_MODE = "quat"
-        SMPLX_DIM_SHAPE_ALL = 300
-
-        self.smplx_layer = SMPLXLayer(
-            Path(__file__).parent.resolve() / "oakink2_layer" / "body_utils" / "body_models" / "smplx",
-            dtype=torch.float32,
-            rot_mode=SMPLX_ROT_MODE,
-            num_betas=SMPLX_DIM_SHAPE_ALL,
-            gender="neutral",
-            use_body_upper_asset=Path(__file__).parent.resolve() / "oakink2_layer" / "smplx_extra" / "body_upper_idx.pt",
-        ).to(self.device)
-
     def __getitem__(self, index):
         capture_name = index
         if type(index) == str:
@@ -122,6 +110,19 @@ class OakInkv2DatasetRH(DexhandData):
             obj_mesh_path.append(obj_filepath)
 
         length = len(frame_id_list)
+
+
+        SMPLX_ROT_MODE = "quat"
+        SMPLX_DIM_SHAPE_ALL = 300
+
+        self.smplx_layer = SMPLXLayer(
+            Path(__file__).parent.resolve() / "oakink2_layer" / "body_utils" / "body_models" / "smplx",
+            dtype=torch.float32,
+            rot_mode=SMPLX_ROT_MODE,
+            num_betas=SMPLX_DIM_SHAPE_ALL,
+            gender="neutral",
+            use_body_upper_asset=Path(__file__).parent.resolve() / "oakink2_layer" / "smplx_extra" / "body_upper_idx.pt",
+        ).to(self.device)
 
         hand_pose = []
         object_pose = []

@@ -50,8 +50,14 @@ class OnPolicyRunnerWithTransformer:
             raise ValueError(f"Training type not found for algorithm {self.alg_cfg['class_name']}.")
 
         # resolve dimensions of observations
-        obs, extras = self.env.get_observations()
-        # num_obs = obs.shape[1]
+        # Compatible with different IsaacLab versions
+        raw = self.env.get_observations()
+        if isinstance(raw, tuple): # For IsaacLab <= 2.2.0
+            obs, extras = raw
+        else: # For IsaacLab >= 2.2.1
+            obs, extras= raw.to_dict().get("policy"), {"observations": raw.to_dict()}
+
+
         num_obs = train_cfg["num_obs"]
 
         # resolve type of privileged observations
@@ -171,7 +177,12 @@ class OnPolicyRunnerWithTransformer:
             )
 
         # start learning
-        obs, extras = self.env.get_observations()
+        # Compatible with different IsaacLab versions
+        raw = self.env.get_observations()
+        if isinstance(raw, tuple): # For IsaacLab <= 2.2.0
+            obs, extras = raw
+        else: # For IsaacLab >= 2.2.1
+            obs, extras= raw.to_dict().get("policy"), {"observations": raw.to_dict()}
         privileged_obs = extras["observations"].get(self.privileged_obs_type, obs)
         obs, privileged_obs = obs.to(self.device), privileged_obs.to(self.device)
         self.train_mode()  # switch to train mode (for dropout for example)
