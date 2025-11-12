@@ -157,8 +157,8 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
         for i in trange(start_frame, num_frame):
             object_pose_frame = object_pose[i]
             hand_pose_frame = hand_pose[i]
-            # vertex, joint = self._compute_hand_geometry(hand_pose_frame)
-            vertex, joint = data["mano_vertex"][i], data["mano_joints"][i]
+            vertex, joint = self._compute_hand_geometry(hand_pose_frame)
+            # vertex, joint = data["mano_vertex"][i], data["mano_joints"][i]
 
             # Update poses for YCB objects
             for k in range(num_objects):

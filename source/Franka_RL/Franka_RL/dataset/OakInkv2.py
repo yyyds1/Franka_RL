@@ -249,6 +249,11 @@ class OakInkv2DatasetRH(DexhandData):
     
     def load_data(self):
         super().load_data()
+        offset = torch.tensor([0., 0., 0.5], device=self.device)
+        self.data["wrist_pos"][..., :3] += offset
+        self.data["body_pos"][..., :3] += offset
+        self.data["obj_pose"][..., :3] += offset
+
         for obj_id in self.data["obj_id"]:
             obj_usd_dir = Path(os.path.join(self.data_dir, "usd_objects", obj_id))
             filenames = list(obj_usd_dir.rglob("*.usd"))
