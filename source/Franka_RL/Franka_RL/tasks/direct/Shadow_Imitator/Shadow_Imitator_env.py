@@ -26,6 +26,7 @@ from isaaclab.markers import VisualizationMarkersCfg, VisualizationMarkers
 from isaaclab.sensors import ContactSensor, ContactSensorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.assets import RigidObjectCfg
+from isaaclab.sim.schemas import MassPropertiesCfg
 from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.sensors import Camera
 
@@ -193,6 +194,7 @@ class ShandImitatorEnv(DirectRLEnv):
                     stabilization_threshold=0.0005,
                 ),
                 # collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+                mass_props=sim_utils.MassPropertiesCfg(density=5.0),
                 joint_drive_props=sim_utils.JointDrivePropertiesCfg(drive_type="force"),
                 fixed_tendons_props=sim_utils.FixedTendonPropertiesCfg(limit_stiffness=30.0, damping=0.1),
             ),
@@ -228,8 +230,8 @@ class ShandImitatorEnv(DirectRLEnv):
                     stabilization_threshold=0.0025,
                     max_depenetration_velocity=1000.0,
                 ),
-                collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
-                mass_props=sim_utils.MassPropertiesCfg(mass=0.05, density=0.0),
+                # collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+                mass_props=sim_utils.MassPropertiesCfg(density=1.0),
                 activate_contact_sensors=True,
             ),
             debug_vis=False,
@@ -562,8 +564,8 @@ class ShandImitatorEnv(DirectRLEnv):
         )
 
 
-        self.reset_terminated = torch.zeros_like(self.reset_terminated).to(torch.bool)
-        self.reset_buf = self.reset_terminated | self.reset_time_outs
+        # self.reset_terminated = torch.zeros_like(self.reset_terminated).to(torch.bool)
+        # self.reset_buf = self.reset_terminated | self.reset_time_outs
         for rew, val in reward_dict.items():
             self._log_reward("Episode_Reward/" + rew, val)
 
@@ -823,6 +825,8 @@ def compute_imitation_reward(
     reward_power = torch.exp(-10 * target_states["power"])
     reward_wrist_power = torch.exp(-2 * target_states["wrist_power"])
 
+
+
     error_buf = (
         (torch.norm(current_eef_vel, dim=-1) > 100)
         | (torch.norm(current_eef_ang_vel, dim=-1) > 200)
@@ -842,8 +846,15 @@ def compute_imitation_reward(
         )
         & (running_progress_buf >= 20)
     ) | error_buf
+
+    succeeded = (
+        progress_buf + 1 + 3 >= max_length
+    ) & ~failed_execute  # reached the end of the trajectory, +3 for max future 3 steps
+
+    reward_alive = torch.where(failed_execute, -10, 0)
+
     reward_execute = (
-        0.1 * reward_eef_pos
+        1.0 * reward_eef_pos
         + 0.6 * reward_eef_rot
         + 0.9 * reward_thumb_tip_pos
         + 0.8 * reward_index_tip_pos
@@ -857,18 +868,13 @@ def compute_imitation_reward(
         + 0.1 * reward_joints_vel
         + 0.5 * reward_power
         + 0.5 * reward_wrist_power
+        + 1.0 * reward_alive
     )
 
-    # succeeded = (
-    #     progress_buf + 1 + 3 >= max_length
-    # ) & ~failed_execute  # reached the end of the trajectory, +3 for max future 3 steps
-    succeeded = (
-        progress_buf + 1 + 3 >= max_length
-    )
     reset_buf = torch.where(
         succeeded | failed_execute,
         torch.ones_like(reset_buf),
-        reset_buf,
+        torch.zeros_like(reset_buf),
     )
     reward_dict = {
         "reward_eef_pos": reward_eef_pos,
@@ -887,6 +893,7 @@ def compute_imitation_reward(
         ),
         "reward_power": reward_power,
         "reward_wrist_power": reward_wrist_power,
+        "reward_alive": reward_alive,
     }
 
     return reward_execute, reset_buf, succeeded, failed_execute, reward_dict, error_buf

@@ -1,1 +1,1 @@
-tensorboard --logdir logs/rsl_rl/Franka_Train/2025-11-07_18-47-06 --port 6007
+tensorboard --logdir logs/rsl_rl/Shand_Imitator/2025-11-12_10-40-55 --port 6008

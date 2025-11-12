@@ -1,7 +1,7 @@
 seed: 42
 device: cuda:0
 num_steps_per_env: 24
-max_iterations: 10000
+max_iterations: 20000
 empirical_normalization: false
 
 num_obs: 5721

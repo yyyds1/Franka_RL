@@ -37,7 +37,7 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     num_dof = 30
     human_delay = 0.0  # delay in seconds
     human_freq = 24
-    human_resample_on_env_reset = False
+    human_resample_on_env_reset = True
     human_filename = "reorderd_ACCAD_walk_10fps.npy"
     
     # log train info cfg
