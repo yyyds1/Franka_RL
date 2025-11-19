@@ -99,7 +99,7 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
             for obj_id, obj_mesh_file in zip(obj_ids, obj_mesh_files):
                 self._load_object(obj_id, obj_mesh_file)
 
-    def render_data(self, data: Dict, fps=5, y_offset=0.8, record_traj=False):
+    def render_data(self, data: Dict, fps=5, y_offset=0.8, record_traj=False, record_Video=False):
         # Set table and viewer pose for better visual effect only
         global_y_offset = -y_offset * len(self.robots) / 2
         self.table.set_pose(sapien.Pose([0.5, global_y_offset + 0.2, 0]))
@@ -132,14 +132,14 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
                 start_frame = i
                 break
 
-        # if self.headless:
-        #     robot_names = self.robot_names.copy()
-        #     robot_names = "_".join(robot_names)
-        #     video_path = Path(__file__).parent.resolve() / f"data/{robot_names}_video.mp4"
-        #     os.makedirs(os.path.dirname(video_path), exist_ok=True)
-        #     writer = cv2.VideoWriter(
-        #         str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (self.camera.get_width(), self.camera.get_height())
-        #     )
+        if self.headless and record_Video:
+            robot_names = self.robot_names.copy()
+            robot_names = "_".join(robot_names)
+            video_path = Path(__file__).parent.resolve() / f"data/{robot_names}_video.mp4"
+            os.makedirs(os.path.dirname(video_path), exist_ok=True)
+            writer = cv2.VideoWriter(
+                str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (self.camera.get_width(), self.camera.get_height())
+            )
 
         if record_traj:
             save_data = {}
@@ -181,14 +181,14 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
                 robot.set_qpos(qpos)
 
             self.scene.update_render()
-            # if self.headless:
-            #     self.camera.take_picture()
-            #     rgb = self.camera.get_picture("Color")[..., :3]
-            #     rgb = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
-            #     writer.write(rgb[..., ::-1])
-            # else:
-            #     for _ in range(step_per_frame):
-            #         self.viewer.render()
+            if not self.headless:
+                for _ in range(step_per_frame):
+                    self.viewer.render()
+            elif record_Video:
+                self.camera.take_picture()
+                rgb = self.camera.get_picture("Color")[..., :3]
+                rgb = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
+                writer.write(rgb[..., ::-1])
 
             if record_traj:
                 for robot, dexhand, copy_ind in zip(self.robots, self.dexhands, list(range(1, num_copy))):
@@ -238,5 +238,5 @@ class RobotHandDatasetSAPIENViewer(HandDatasetSAPIENViewer):
         if not self.headless:
             self.viewer.paused = True
             self.viewer.render()
-        # else:
-            # writer.release()
+        elif record_Video:
+            writer.release()

@@ -31,7 +31,7 @@ np.unicode = np.unicode_
 def mano2dexhand(dataset: str, data_root: Path, robots: Optional[List[str]]):
     for robot in robots:
         dexhand = RobotFactory.create_robot(robot)
-        dataset = DataFactory.create_data(dataset, data_path=data_root, dexhand=dexhand, skip=5)
+        dataset = DataFactory.create_data(dataset, data_dir=data_root, dexhand=dexhand, skip=5)
         viewer = RobotHandDatasetSAPIENViewer([dexhand], HandType.right if dexhand.side == "right" else HandType.left, headless=True, use_ray_tracing=True)
 
         # Data ID, feel free to change it to visualize different trajectory,
@@ -42,13 +42,13 @@ def mano2dexhand(dataset: str, data_root: Path, robots: Optional[List[str]]):
 
         for i in range(0, len(data_id_available)):
             idx = data_id_available[i]
-            if(idx == "667a8@2"):
+            if(idx == 219):
                 skip = i + 1
                 break
 
         for i in range(skip, len(data_id_available)):
-            print(f"Processing data: {idx}")
             idx = data_id_available[i]
+            print(f"Processing data: {idx}")
             sampled_data = dataset[idx]
             if(sampled_data is None):
                 print(f"Can't find the object in data: {idx}!")
@@ -56,9 +56,9 @@ def mano2dexhand(dataset: str, data_root: Path, robots: Optional[List[str]]):
 
         
             viewer.load_object_hand(sampled_data)
-            viewer.render_data(sampled_data, fps=dataset.fps, record_traj=True)
+            viewer.render_data(sampled_data, fps=dataset.fps, record_traj=True, record_Video=False)
 
-            print(f"Processing data: {idx}")
+            print(f"Export data: {idx}")
 
 
 

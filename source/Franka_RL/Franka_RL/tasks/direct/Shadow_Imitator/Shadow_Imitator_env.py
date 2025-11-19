@@ -487,7 +487,7 @@ class ShandImitatorEnv(DirectRLEnv):
                     "obj_to_joints",
                     "gt_tips_distance",
                     # "obj_pcl",
-                    "obj_feature",
+                    # "obj_feature",
                 ]
             ],
             dim=-1,

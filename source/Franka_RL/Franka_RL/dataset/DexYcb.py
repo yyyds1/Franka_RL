@@ -113,11 +113,13 @@ class DexYcbDataset(DexhandData):
     ):
         super().__init__(data_dir=data_dir, device=device, dexhand=dexhand)
         self.data_dir = Path(self.data_dir)
+        self.fps = 10
         self._calib_dir = self.data_dir / "calibration"
         self._model_dir = self.data_dir / "models"
 
         # Filter
         self.use_filter = len(filter_objects) > 0
+        self.use_filter = True
         inverse_ycb_class = {"_".join(value.split("_")[1:]): key for key, value in YCB_CLASSES.items()}
         ycb_object_names = list(inverse_ycb_class.keys())
         filter_ids = []
@@ -127,13 +129,15 @@ class DexYcbDataset(DexhandData):
             else:
                 filter_ids.append(inverse_ycb_class[obj])
 
+        filter_ids = YCB_CLASSES.keys()
+
         # Camera and mano
         self._intrinsics, self._extrinsics = self._load_camera_parameters()
         self._mano_side = self.dexhand.side
         self._mano_parameters = self._load_mano()
 
         # Capture data
-        self._subject_dirs = [sub for sub in self._data_dir.iterdir() if sub.stem in _SUBJECTS]
+        self._subject_dirs = [sub for sub in self.data_dir.iterdir() if sub.stem in _SUBJECTS]
         self._capture_meta = {}
         self._capture_pose = {}
         self._capture_filter = {}
@@ -174,7 +178,8 @@ class DexYcbDataset(DexhandData):
         meta = self._capture_meta[capture_name]
         pose = self._capture_pose[capture_name]
         hand_pose = pose["pose_m"]
-        object_pose = pose["pose_y"]
+        # object_pose = pose["pose_y"]
+        object_pose = np.concatenate([pose["pose_y"][..., 4:], pose["pose_y"][..., 3:4], pose["pose_y"][..., :3]], axis=-1)
         ycb_ids = meta["ycb_ids"]
 
         # Load extrinsic and mano parameters
@@ -186,18 +191,19 @@ class DexYcbDataset(DexhandData):
 
         if self.use_filter:
             capture_filter = np.array(self._capture_filter[capture_name])
-            frame_indices, _ = self._filter_object_motion_frame(capture_filter, object_pose)
-            ycb_ids = [ycb_ids[valid_id] for valid_id in self._capture_filter[capture_name]]
-            hand_pose = hand_pose[frame_indices]
-            object_pose = object_pose[frame_indices][:, capture_filter, :]
+            # frame_indices, filter_id = self._filter_object_motion_frame(capture_filter, object_pose)
+            ycb_ids = [ycb_ids[valid_id] for valid_id in capture_filter]
+            # hand_pose = hand_pose[frame_indices]
+            object_pose = object_pose[:, capture_filter, :]
         object_mesh_files = [self._object_mesh_file(ycb_id) for ycb_id in ycb_ids]
+        obj_ids = [YCB_CLASSES[idx] for idx in ycb_ids]
 
         ycb_data = dict(
             data_dir=self.data_dir,
             hand_pose=hand_pose,
             object_pose=object_pose,
             extrinsics=extrinsic_mat,
-            obj_ids=ycb_ids,
+            obj_ids=obj_ids,
             hand_shape=mano_parameters,
             object_mesh_file=object_mesh_files,
             capture_name=capture_name,
@@ -230,7 +236,7 @@ class DexYcbDataset(DexhandData):
         return current_move or future_move
 
     def _object_mesh_file(self, object_id):
-        obj_file = self._data_dir / "models" / YCB_CLASSES[object_id] / "textured_simple.obj"
+        obj_file = self.data_dir / "models" / YCB_CLASSES[object_id] / "textured_simple.obj"
         return str(obj_file.resolve())
 
     def _load_camera_parameters(self):
@@ -269,3 +275,6 @@ class DexYcbDataset(DexhandData):
             mano_parameters[mano_name] = np.array(shape_parameters["betas"])
 
         return mano_parameters
+    
+    def available_index(self):
+        return range(0, len(self))

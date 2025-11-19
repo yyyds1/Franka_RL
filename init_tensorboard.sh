@@ -1,1 +1,1 @@
-tensorboard --logdir logs/rsl_rl/Shand_Imitator/2025-11-12_11-37-24 --port 6008
+tensorboard --logdir logs/rsl_rl/Shand_Imitator/2025-11-19_14-01-20 --port 6008
