@@ -28,8 +28,8 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     action_rot_scale = 0.2
     action_moving_scale = 1.0
     action_space = 28
-    observation_space = 5721
-    state_space = 5721
+    observation_space = 1425
+    state_space = 1425
 
     future_frame = 5
 
@@ -79,7 +79,7 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     up_weight: float = 0.1
 
     tightenMethod = "exp_decay"
-    tightenFactor = 0.7 # 1.0 means no tightening restriction
+    tightenFactor = 0.35 # 1.0 means no tightening restriction
     tightenSteps = 128000
 
     energy_cost_scale: float = 0.05

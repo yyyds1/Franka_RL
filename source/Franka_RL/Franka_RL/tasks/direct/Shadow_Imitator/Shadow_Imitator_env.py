@@ -458,11 +458,11 @@ class ShandImitatorEnv(DirectRLEnv):
                     "cos_joint_pos",
                     "sin_joint_pos",
                     "wrist_pos",
-                    "obj_trans",
-                    "obj_vel",
-                    "tip_force",
-                    # "obj_com",
-                    "obj_gravity",
+                    # "obj_trans",
+                    # "obj_vel",
+                    # "tip_force",
+                    # # "obj_com",
+                    # "obj_gravity",
                 ]
             ] + [
                 next_target_state[ob]
@@ -477,15 +477,15 @@ class ShandImitatorEnv(DirectRLEnv):
                     "delta_joints_pos",
                     "joints_vel",
                     "delta_joints_vel",
-                    "delta_manip_obj_pos",
-                    "manip_obj_vel",
-                    "delta_manip_obj_vel",
-                    "manip_obj_quat",
-                    "delta_manip_obj_quat",
-                    "manip_obj_ang_vel",
-                    "delta_manip_obj_ang_vel",
-                    "obj_to_joints",
-                    "gt_tips_distance",
+                    # "delta_manip_obj_pos",
+                    # "manip_obj_vel",
+                    # "delta_manip_obj_vel",
+                    # "manip_obj_quat",
+                    # "delta_manip_obj_quat",
+                    # "manip_obj_ang_vel",
+                    # "delta_manip_obj_ang_vel",
+                    # "obj_to_joints",
+                    # "gt_tips_distance",
                     # "obj_pcl",
                     # "obj_feature",
                 ]
@@ -844,17 +844,17 @@ def compute_imitation_reward(
             | (diff_level_1_pos_dist > 0.07 / 0.7 * scale_factor)
             | (diff_level_2_pos_dist > 0.08 / 0.7 * scale_factor)
         )
-        & (running_progress_buf >= 20)
+        & (running_progress_buf >= 10)
     ) | error_buf
 
     succeeded = (
         progress_buf + 1 + 3 >= max_length
     ) & ~failed_execute  # reached the end of the trajectory, +3 for max future 3 steps
 
-    reward_alive = torch.where(failed_execute, -10, 0)
+    reward_alive = torch.where(failed_execute, -50, 0)
 
     reward_execute = (
-        1.0 * reward_eef_pos
+        5.0 * reward_eef_pos
         + 0.6 * reward_eef_rot
         + 0.9 * reward_thumb_tip_pos
         + 0.8 * reward_index_tip_pos

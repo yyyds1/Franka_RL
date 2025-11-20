@@ -4,16 +4,16 @@ num_steps_per_env: 24
 max_iterations: 100000
 empirical_normalization: false
 
-num_obs: 1625
-num_pre_obs: 1625
+num_obs: 1425
+num_pre_obs: 1425
 num_action: 28
 
 algorithm:
   class_name: PPO
   num_learning_epochs: 5
   num_mini_batches: 4
-  learning_rate: 0.001
-  schedule: adaptive
+  learning_rate: 0.0001
+  schedule: fixed
   gamma: 0.99
   lam: 0.95
   entropy_coef: 0.005
@@ -22,7 +22,7 @@ algorithm:
   value_loss_coef: 1.0
   use_clipped_value_loss: true
   clip_param: 0.2
-  normalize_advantage_per_mini_batch: false
+  normalize_advantage_per_mini_batch: true
   symmetry_cfg: null
   rnd_cfg: null
 
@@ -51,13 +51,13 @@ policy:
         obs_mlp:
           _target_: Franka_RL.models.mlp.MLP_WithNorm
           _recursive_: False
-          num_in: 1625
+          num_in: 1425
           num_out: ${...transformer_token_size}
           config:
             mask_key: null
             obs_key: self_obs
             slice_start_idx: 0
-            slice_end_idx: 1625
+            slice_end_idx: 1425
             normalize_obs: True
             norm_clamp_value: 5
             layers:
@@ -117,7 +117,7 @@ policy:
           config:
             obs_key: self_obs
             slice_start_idx: 0
-            slice_end_idx: 1625
+            slice_end_idx: 1425
             normalize_obs: True
             norm_clamp_value: 5
       trunk:
