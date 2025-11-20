@@ -30,7 +30,7 @@ from isaaclab.sim.schemas import MassPropertiesCfg
 from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.sensors import Camera
 
-from .Shadow_Imitator_env_cfg import ShandImitatorEnvCfg
+from .Shadow_Imitator_woobj_env_cfg import ShandImitatorwoobjEnvCfg
 from Franka_RL.robots import RobotFactory
 from Franka_RL.dataset import DataFactory
 from Franka_RL.models.pointtransformer import pointtransformer_enc_repro
@@ -53,10 +53,10 @@ def to_euler_angles(quat):
     # concat v and r
     return torch.tensor(np.concatenate((v, r), axis=-1), dtype=torch.float32)
 
-class ShandImitatorEnv(DirectRLEnv):
-    cfg: ShandImitatorEnvCfg
+class ShandImitatorwoobjEnv(DirectRLEnv):
+    cfg: ShandImitatorwoobjEnvCfg
 
-    def __init__(self, cfg: ShandImitatorEnvCfg, render_mode: str | None = None, **kwargs):
+    def __init__(self, cfg: ShandImitatorwoobjEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
         self.obs_future_length = self.cfg.future_frame
@@ -72,7 +72,7 @@ class ShandImitatorEnv(DirectRLEnv):
 
     def _init_traj(self):
 
-        self.dataset = DataFactory.create_data(data_type=self.cfg.dataset_type, device=self.device, dexhand=self.dexhand)
+        self.dataset = DataFactory.create_data(data_type=self.cfg.dataset_type, data_dir=self.cfg.dataset_path, device=self.device, dexhand=self.dexhand)
         self.dataset.load_data()
         self.traj_num = self.dataset.data["traj_num"]
         self.traj_len_max = self.dataset.data["max_traj_length"]
@@ -82,6 +82,8 @@ class ShandImitatorEnv(DirectRLEnv):
         self.target_wrist_pos_seq = self.dataset.data["wrist_pos"][self.target_jt_i]
         self.target_wrist_vel_seq = self.dataset.data["wrist_vel"][self.target_jt_i]
         self.target_joint_pos_seq = self.dataset.data["joints_pos"][self.target_jt_i]
+        self.target_body_pos_seq = self.dataset.data["body_pos"][self.target_jt_i]
+        self.target_body_vel_seq = self.dataset.data["body_vel"][self.target_jt_i]
         
         self.target_jt_j = (torch.rand(self.num_envs).to(dtype=torch.float32, device=self.device) * (self.traj_len_seq - 1)).to(torch.int64)
         self.running_frame_len = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
@@ -102,6 +104,8 @@ class ShandImitatorEnv(DirectRLEnv):
                 self.target_wrist_pos_seq[reset_env_ids] = self.dataset.data["wrist_pos"][self.target_jt_i[reset_env_ids]]
                 self.target_wrist_vel_seq[reset_env_ids] = self.dataset.data["wrist_vel"][self.target_jt_i[reset_env_ids]]
                 self.target_joint_pos_seq[reset_env_ids] = self.dataset.data["joints_pos"][self.target_jt_i[reset_env_ids]]
+                self.target_body_pos_seq[reset_env_ids] = self.dataset.data["body_pos"][self.target_jt_i[reset_env_ids]]
+                self.target_body_vel_seq[reset_env_ids] = self.dataset.data["body_vel"][self.target_jt_i[reset_env_ids]]
                 self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * (self.traj_len_seq[reset_env_ids] - 1)).to(torch.int64)
             else:
                 self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * (self.traj_len_seq[reset_env_ids] - 1)).to(torch.int64)
@@ -163,7 +167,6 @@ class ShandImitatorEnv(DirectRLEnv):
         # clone, filter, and replicate
         # self.scene.clone_environments(copy_from_source=False)
         self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
-        self.scene.rigid_objects["object"] = self.object
         # add articultion to scene
         self.scene.articulations["robot"] = self.robot
         # add lights

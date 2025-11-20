@@ -12,7 +12,7 @@ algorithm:
   class_name: PPO
   num_learning_epochs: 5
   num_mini_batches: 4
-  learning_rate: 0.00001
+  learning_rate: 0.0001
   schedule: fixed
   gamma: 0.99
   lam: 0.95
@@ -36,10 +36,10 @@ policy:
     num_out: ${..num_action}
     config:
       transformer_token_size: ${.latent_dim}
-      # latent_dim: 512
-      # ff_size: 1024
-      latent_dim: 256
-      ff_size: 512
+      latent_dim: 512
+      ff_size: 1024
+      # latent_dim: 256
+      # ff_size: 512
       num_layers: 4
       num_heads: 4
       dropout: 0
@@ -122,7 +122,7 @@ policy:
 
 clip_actions: null
 save_interval: 500
-experiment_name: Shand_Imitator
+experiment_name: Shand_Imitator_woobj
 run_name: ''
 logger: tensorboard
 neptune_project: isaaclab

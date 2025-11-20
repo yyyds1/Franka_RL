@@ -18,7 +18,7 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 import torch
 
 @configclass
-class ShandImitatorEnvCfg(DirectRLEnvCfg):
+class ShandImitatorwoobjEnvCfg(DirectRLEnvCfg):
     # env
     episode_length_s = 2.5
     # decimation: Number of control action updates @ sim DT per policy DT
@@ -71,8 +71,8 @@ class ShandImitatorEnvCfg(DirectRLEnvCfg):
     side = 'right'
         
     # dataset
-    dataset_type = 'OakInkv2_rh'
-    dataset_path = 'dataset/OakInk-v2'
+    dataset_type = 'DexYcb'
+    dataset_path = 'dataset/DexYcb'
 
     gym2lab_order: list = [0, 5, 10, 1, 6, 11, 15, 2, 7, 12, 16, 3, 8, 13, 17, 4, 9, 14, 18]
     heading_weight: float = 0.5

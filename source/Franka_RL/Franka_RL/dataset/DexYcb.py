@@ -114,58 +114,58 @@ class DexYcbDataset(DexhandData):
         super().__init__(data_dir=data_dir, device=device, dexhand=dexhand)
         self.data_dir = Path(self.data_dir)
         self.fps = 10
-        self._calib_dir = self.data_dir / "calibration"
-        self._model_dir = self.data_dir / "models"
+        # self._calib_dir = self.data_dir / "calibration"
+        # self._model_dir = self.data_dir / "models"
 
-        # Filter
-        self.use_filter = len(filter_objects) > 0
-        self.use_filter = True
-        inverse_ycb_class = {"_".join(value.split("_")[1:]): key for key, value in YCB_CLASSES.items()}
-        ycb_object_names = list(inverse_ycb_class.keys())
-        filter_ids = []
-        for obj in filter_objects:
-            if obj not in ycb_object_names:
-                print(f"Filter object name {obj} is not a valid YCB name")
-            else:
-                filter_ids.append(inverse_ycb_class[obj])
+        # # Filter
+        # self.use_filter = len(filter_objects) > 0
+        # self.use_filter = True
+        # inverse_ycb_class = {"_".join(value.split("_")[1:]): key for key, value in YCB_CLASSES.items()}
+        # ycb_object_names = list(inverse_ycb_class.keys())
+        # filter_ids = []
+        # for obj in filter_objects:
+        #     if obj not in ycb_object_names:
+        #         print(f"Filter object name {obj} is not a valid YCB name")
+        #     else:
+        #         filter_ids.append(inverse_ycb_class[obj])
 
-        filter_ids = YCB_CLASSES.keys()
+        # filter_ids = YCB_CLASSES.keys()
 
-        # Camera and mano
-        self._intrinsics, self._extrinsics = self._load_camera_parameters()
-        self._mano_side = self.dexhand.side
-        self._mano_parameters = self._load_mano()
+        # # Camera and mano
+        # self._intrinsics, self._extrinsics = self._load_camera_parameters()
+        # self._mano_side = self.dexhand.side
+        # self._mano_parameters = self._load_mano()
 
-        # Capture data
-        self._subject_dirs = [sub for sub in self.data_dir.iterdir() if sub.stem in _SUBJECTS]
-        self._capture_meta = {}
-        self._capture_pose = {}
-        self._capture_filter = {}
-        self._captures = []
-        for subject_dir in self._subject_dirs:
-            for capture_dir in subject_dir.iterdir():
-                meta_file = capture_dir / "meta.yml"
-                with meta_file.open(mode="r") as f:
-                    meta = yaml.load(f, Loader=yaml.FullLoader)
+        # # Capture data
+        # self._subject_dirs = [sub for sub in self.data_dir.iterdir() if sub.stem in _SUBJECTS]
+        # self._capture_meta = {}
+        # self._capture_pose = {}
+        # self._capture_filter = {}
+        # self._captures = []
+        # for subject_dir in self._subject_dirs:
+        #     for capture_dir in subject_dir.iterdir():
+        #         meta_file = capture_dir / "meta.yml"
+        #         with meta_file.open(mode="r") as f:
+        #             meta = yaml.load(f, Loader=yaml.FullLoader)
 
-                if self.dexhand.side not in meta["mano_sides"]:
-                    continue
+        #         if self.dexhand.side not in meta["mano_sides"]:
+        #             continue
 
-                pose = np.load((capture_dir / "pose.npz").resolve().__str__())
-                if self.use_filter:
-                    ycb_ids = meta["ycb_ids"]
-                    # Skip current capture if no desired object inside
-                    if len(list(set(ycb_ids) & set(filter_ids))) < 1:
-                        continue
-                    capture_filter = [i for i in range(len(ycb_ids)) if ycb_ids[i] in filter_ids]
-                    object_pose = pose["pose_y"]
-                    frame_indices, filter_id = self._filter_object_motion_frame(capture_filter, object_pose)
-                    if len(frame_indices) < 20:
-                        continue
-                    self._capture_filter[capture_dir.stem] = [filter_id]
-                self._capture_meta[capture_dir.stem] = meta
-                self._capture_pose[capture_dir.stem] = pose
-                self._captures.append(capture_dir.stem)
+        #         pose = np.load((capture_dir / "pose.npz").resolve().__str__())
+        #         if self.use_filter:
+        #             ycb_ids = meta["ycb_ids"]
+        #             # Skip current capture if no desired object inside
+        #             if len(list(set(ycb_ids) & set(filter_ids))) < 1:
+        #                 continue
+        #             capture_filter = [i for i in range(len(ycb_ids)) if ycb_ids[i] in filter_ids]
+        #             object_pose = pose["pose_y"]
+        #             frame_indices, filter_id = self._filter_object_motion_frame(capture_filter, object_pose)
+        #             if len(frame_indices) < 20:
+        #                 continue
+        #             self._capture_filter[capture_dir.stem] = [filter_id]
+        #         self._capture_meta[capture_dir.stem] = meta
+        #         self._capture_pose[capture_dir.stem] = pose
+        #         self._captures.append(capture_dir.stem)
 
     def __len__(self):
         return len(self._captures)
