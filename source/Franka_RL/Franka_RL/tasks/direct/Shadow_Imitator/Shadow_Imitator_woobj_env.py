@@ -35,6 +35,8 @@ from Franka_RL.robots import RobotFactory
 from Franka_RL.dataset import DataFactory
 from Franka_RL.models.pointtransformer import pointtransformer_enc_repro
 
+from Franka_RL.dataset.transform import quat_to_rotmat, rotmat_to_euler
+
 def normalize_angle(x):
     return torch.atan2(torch.sin(x), torch.cos(x))
 
@@ -69,6 +71,9 @@ class ShandImitatorwoobjEnv(DirectRLEnv):
         self.tighten_method = self.cfg.tightenMethod
         self.tighten_factor = self.cfg.tightenFactor
         self.tighten_steps = self.cfg.tightenSteps
+
+        self.joint_idx = [self.robot.joint_names.index(joint) for joint in self.dexhand.dof_names]
+        self.body_idx = [self.robot.body_names.index(body) for body in self.dexhand.body_names]
 
     def _init_traj(self):
 
@@ -142,6 +147,7 @@ class ShandImitatorwoobjEnv(DirectRLEnv):
                     solver_velocity_iteration_count=0,
                     sleep_threshold=0.005,
                     stabilization_threshold=0.0005,
+                    fix_root_link=True,
                 ),
                 # collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
                 mass_props=sim_utils.MassPropertiesCfg(density=5.0),
@@ -205,25 +211,28 @@ class ShandImitatorwoobjEnv(DirectRLEnv):
         # self.action[:, 3:6] -- torque applied to root
         # self.action[:, 6:] -- dexhand joint target
         self.last_actions = self.actions
-        self.actions[:, :3] = actions[:, :3] * self.dt * self.action_pos_scale * self.action_moving_scale + self.last_actions[:, :3] * (1 - self.action_moving_scale)
-        self.actions[:, 3:6] = actions[:, 3:6] * self.dt * self.action_rot_scale * self.action_moving_scale + self.last_actions[:, 3:6] * (1 - self.action_moving_scale)
+        # self.actions[:, :3] = actions[:, :3] * self.dt * self.action_pos_scale * self.action_moving_scale + self.last_actions[:, :3] * (1 - self.action_moving_scale)
+        # self.actions[:, 3:6] = actions[:, 3:6] * self.dt * self.action_rot_scale * self.action_moving_scale + self.last_actions[:, 3:6] * (1 - self.action_moving_scale)
+        self.actions[:, :3] = actions[:, :3] * self.action_joint_scale * self.action_moving_scale + self.last_actions[:, :3] * (1 - self.action_moving_scale)
+        self.actions[:, 3:6] = torch.tanh(actions[:, 3:6]) * np.pi * self.action_moving_scale + self.last_actions[:, 3:6] * (1 - self.action_moving_scale)
         self.actions[:, 6:] = ((torch.tanh(actions[:, 6:]) + 1) / 2 * (self.joint_limits[:, 1] - self.joint_limits[:, 0]) + self.joint_limits[:, 0]) * self.action_moving_scale + self.last_actions[:, 6:] * (1 - self.action_moving_scale)
         # self.actions[:, 6:] = torch.clamp(torch.tanh(actions[:, 6:] * self.action_scale) * torch.pi / 6 + self.dof_pos, min = self.joint_limits[:, 0], max=self.joint_limits[:, 1])
         # self.actions = torch.tanh(actions * self.action_scale) * self.joint_gears
         pass
 
     def _apply_action(self) -> None:
-        self.robot.set_external_force_and_torque(forces=self.actions[:, :3].unsqueeze(1), torques=self.actions[:, 3:6].unsqueeze(1), body_ids=[self.robot.body_names.index(self.dexhand.wrist_name)])
-        self.robot.set_joint_position_target(self.actions[:, 6:], joint_ids=range(0, self.dexhand.n_dofs))
+        # self.robot.set_external_force_and_torque(forces=self.actions[:, :3].unsqueeze(1), torques=self.actions[:, 3:6].unsqueeze(1), body_ids=[self.robot.body_names.index(self.dexhand.wrist_name)])
+        # self.robot.set_joint_position_target(self.actions[:, 6:], joint_ids=range(0, self.dexhand.n_dofs))
+        self.robot.set_joint_position_target(self.actions)
 
     def _compute_intermediate_values(self):
-        self.dof_pos, self.dof_vel = self.robot.data.joint_pos, self.robot.data.joint_vel
-        self.dof_torque = self.robot.data.applied_torque
+        self.dof_pos, self.dof_vel = self.robot.data.joint_pos[:, self.joint_idx], self.robot.data.joint_vel[:, self.joint_idx]
+        self.dof_torque = self.robot.data.applied_torque[:, 6:]
 
         self.wrist_pos = self.robot.data.body_state_w[:, self.robot.body_names.index(self.dexhand.wrist_name), :7] - F.pad(self.scene.env_origins, (0, 4))
         self.wrist_vel = self.robot.data.body_state_w[:, self.robot.body_names.index(self.dexhand.wrist_name), 7:]
-        self.body_pos = self.robot.data.body_state_w[:, :, :7] - F.pad(self.scene.env_origins, (0, 4)).repeat(1, self.dexhand.n_bodies).view(self.num_envs, self.dexhand.n_bodies, 7)
-        self.body_vel = self.robot.data.body_state_w[:, :, 7:]
+        self.body_pos = self.robot.data.body_state_w[:, self.body_idx, :7] - F.pad(self.scene.env_origins, (0, 4)).repeat(1, self.dexhand.n_bodies).view(self.num_envs, self.dexhand.n_bodies, 7)
+        self.body_vel = self.robot.data.body_state_w[:, self.body_idx, 7:]
 
         # For Markers 
         self.target_body_pos_w = self.target_body_pos_seq[torch.arange(self.num_envs).to(device=self.device), self.target_jt_j] + F.pad(self.scene.env_origins, (0, 4)).repeat(1, self.dexhand.n_bodies).view(self.num_envs, self.dexhand.n_bodies, 7)
@@ -434,16 +443,22 @@ class ShandImitatorwoobjEnv(DirectRLEnv):
         super()._reset_idx(env_ids)
 
         joint_pos = self.target_joint_pos_seq[env_ids, self.target_jt_j[env_ids]]
-        joint_vel = self.robot.data.default_joint_vel[env_ids]
+        joint_vel = self.robot.data.default_joint_vel[env_ids, 6:]
+        wrist_pos = self.target_wrist_pos_seq[env_ids, self.target_jt_j[env_ids], :3]
+        wrist_vel = self.robot.data.default_joint_vel[env_ids, :3]
+        wrist_rot = rotmat_to_euler(quat_to_rotmat(self.target_wrist_pos_seq[env_ids, self.target_jt_j[env_ids], 3:]), "XYZ")
+        wrist_ang_vel = self.robot.data.default_joint_vel[env_ids, 3:6]
         
         default_root_state = self.robot.data.default_root_state[env_ids]
-        default_root_state[:, :7] = self.target_wrist_pos_seq[env_ids, self.target_jt_j[env_ids]]
+        # default_root_state[:, :7] = self.target_wrist_pos_seq[env_ids, self.target_jt_j[env_ids]]
         default_root_state[:, :3] += self.scene.env_origins[env_ids]
         
         self.robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self.robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         # this can only be turned on if robot joint is corrected
-        self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+        self.robot.write_joint_state_to_sim(wrist_pos, wrist_vel, [0, 1, 2], env_ids)
+        self.robot.write_joint_state_to_sim(wrist_rot, wrist_ang_vel, [3, 4, 5], env_ids)
+        self.robot.write_joint_state_to_sim(joint_pos, joint_vel, self.joint_idx, env_ids)
 
         self._compute_intermediate_values()
     
@@ -485,7 +500,7 @@ class ShandImitatorwoobjEnv(DirectRLEnv):
             self.scene.update(dt=self.physics_dt)
 
         # Visualize Markers
-        self.body_pos_marker.visualize(self.robot.data.body_state_w[:, :, :3].reshape(-1, 3), self.robot.data.body_state_w[:, :, 3:7].reshape(-1, 4))
+        self.body_pos_marker.visualize(self.robot.data.body_state_w[:, self.body_idx, :3].reshape(-1, 3), self.robot.data.body_state_w[:, self.body_idx, 3:7].reshape(-1, 4))
         self.target_body_pos_marker.visualize(self.target_body_pos_w[:, :, :3].reshape(-1, 3), self.target_body_pos_w[:, :, 3:7].reshape(-1, 4))
 
         # post-step:

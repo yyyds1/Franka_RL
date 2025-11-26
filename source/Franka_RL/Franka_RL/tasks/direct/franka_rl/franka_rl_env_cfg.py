@@ -5,6 +5,7 @@
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, RigidObjectCfg
+from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
@@ -34,7 +35,7 @@ class FrankaRlEnvCfg(DirectRLEnvCfg):
     # for h1 shadow
     num_dof = 30
     human_delay = 0.0  # delay in seconds
-    human_freq = 5
+    human_freq = 10
     human_resample_on_env_reset = True
     human_filename = "reorderd_ACCAD_walk_10fps.npy"
     
@@ -63,7 +64,57 @@ class FrankaRlEnvCfg(DirectRLEnvCfg):
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=2.0, replicate_physics=False)
 
     # robot
-    robot: ArticulationCfg = FRANKA_PANDA_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+    robot: ArticulationCfg = ArticulationCfg(
+        prim_path="/World/envs/env_.*/Robot",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path="assets/Panda/panda.usd",
+            activate_contact_sensors=False,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=True,
+                max_depenetration_velocity=5.0,
+            ),
+            articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+                enabled_self_collisions=True,
+                solver_position_iteration_count=8,
+                solver_velocity_iteration_count=0,
+                fix_root_link=True,
+            ),
+            # collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+        ),
+        init_state=ArticulationCfg.InitialStateCfg(
+            joint_pos={
+                "panda_joint1": 0.0,
+                "panda_joint2": -0.569,
+                "panda_joint3": 0.0,
+                "panda_joint4": -2.810,
+                "panda_joint5": 0.0,
+                "panda_joint6": 3.037,
+                "panda_joint7": 0.741,
+                "panda_finger_joint.*": 0.04,
+            },
+        ),
+        actuators={
+            "panda_shoulder": ImplicitActuatorCfg(
+                joint_names_expr=["panda_joint[1-4]"],
+                effort_limit_sim=87.0,
+                stiffness=80.0,
+                damping=4.0,
+            ),
+            "panda_forearm": ImplicitActuatorCfg(
+                joint_names_expr=["panda_joint[5-7]"],
+                effort_limit_sim=12.0,
+                stiffness=80.0,
+                damping=4.0,
+            ),
+            "panda_hand": ImplicitActuatorCfg(
+                joint_names_expr=["panda_finger_joint.*"],
+                effort_limit_sim=200.0,
+                stiffness=2e3,
+                damping=1e2,
+            ),
+        },
+        soft_joint_pos_limit_factor=1.0,
+    )
     robot.init_state.pos = (0.0, 0.0, 0.0)
 
     # camera
@@ -88,7 +139,7 @@ class FrankaRlEnvCfg(DirectRLEnvCfg):
     # max_traj_len = 100
         
     # dataset_path
-    dataset = './dataset'
+    dataset = './dataset/maniskill'
 
     joint_gears: list = [
         87.000,

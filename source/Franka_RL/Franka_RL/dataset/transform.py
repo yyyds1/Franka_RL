@@ -320,6 +320,22 @@ def rot6d_to_quat(rotation_6d: Union[torch.Tensor, np.ndarray]) -> Union[torch.T
     t = Compose([rotation_6d_to_matrix, matrix_to_quaternion])
     return t(rotation_6d)
 
+def rotmat_to_euler(matrix: Union[torch.Tensor, np.ndarray], convention: str) -> Union[torch.Tensor, np.ndarray]:
+    """Convert quaternions to eular.
+
+    Args:
+        matrix (Union[torch.Tensor, numpy.ndarray]): input shape
+                should be (..., 3, 3). ndim of input is unlimited.
+
+        convention Convention string of three uppercase letters.
+
+    Returns:
+        Union[torch.Tensor, numpy.ndarray]: shape would be (..., 3).
+    """
+    if matrix.shape[-1] != 3 or matrix.shape[-2] != 3:
+        raise ValueError(f"Invalid rotation matrix  shape f{matrix.shape}.")
+    t = Compose([matrix_to_euler_angles])
+    return t(matrix, convention)
 
 def _rotate_smpl_pose(pose, rot):
     """Rotate SMPL pose parameters.

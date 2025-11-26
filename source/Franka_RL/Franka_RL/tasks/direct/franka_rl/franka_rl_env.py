@@ -125,8 +125,8 @@ class FrankaRlEnv(DirectRLEnv):
         else:
             self.target_jt_j[reset_env_ids] = (torch.rand(reset_env_ids.shape[0]).to(dtype=torch.float32, device=self.device) * self.traj_len[self.target_jt_i[reset_env_ids]]).to(torch.int)
 
-            self.target_jt = self.target_jt_seq[self.target_jt_i, self.target_jt_j]
-            self.target_eepose = self.target_eepose_seq[self.target_jt_i, self.target_jt_j]
+        self.target_jt = self.target_jt_seq[self.target_jt_i, self.target_jt_j]
+        self.target_eepose = self.target_eepose_seq[self.target_jt_i, self.target_jt_j]
 
         if self.common_step_counter % self.target_jt_update_steps_int == 0:
             if self.common_step_counter == 0:
@@ -211,7 +211,7 @@ class FrankaRlEnv(DirectRLEnv):
         joint_reward = torch.exp(- torch.norm(self.target_jt - self.dof_pos, p=2, dim=-1))
 
         died, _ = self._get_dones()
-        alive_reward = torch.where(died, -100, 0)
+        alive_reward = torch.where(died, -10, 0)
 
         action_diff = self.actions - self.last_actions
         smooth_reward =  torch.exp(- torch.norm(action_diff, p=2, dim=-1))
@@ -223,10 +223,9 @@ class FrankaRlEnv(DirectRLEnv):
         self._log_reward("Episode_Reward/smooth_reward", smooth_reward)
 
         total_reward = (
-            100 * 
-            eepose_reward *
-            joint_reward +
-            alive_reward
+            5.0 * eepose_reward
+            + 2.0 * joint_reward
+            # + alive_reward
             # smooth_reward
         )
         self._log_reward("Episode_Reward/total_reward", total_reward)
@@ -271,7 +270,7 @@ class FrankaRlEnv(DirectRLEnv):
         self._compute_intermediate_values()
         time_out = self.target_jt_j >= self.traj_len[self.target_jt_i]
 
-        died = - self.eepose_error > 0.15
+        died = - self.eepose_error > 0.05
         return died, time_out
 
     def _reset_idx(self, env_ids: Sequence[int] | None):

@@ -76,13 +76,26 @@ class Shadow(DexHand, ABC):
             "lfdistal",
         ]
         self.init_state = ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 0.5),
-            rot=(-0.707, 0.0, 0.0, 0.707),
+            pos=(0.0, 0.0, 0.0),
+            rot=(1.0, 0.0, 0.0, 0.0),
             joint_pos={
                 ".*J.*": 0.0,
             },
         )
         self.actuators = {
+            "dummy_joints": ImplicitActuatorCfg(
+                joint_names_expr=[".*dummy.*"],
+                effort_limit={
+                    ".*": 20,
+                },
+                stiffness={
+                    ".*": 5,
+                },
+                damping={
+                    ".*": 0.5,
+                },
+
+            ),
             "fingers": ImplicitActuatorCfg(
                 joint_names_expr=[".*J.*"],
                 effort_limit={
@@ -157,7 +170,8 @@ class Shadow(DexHand, ABC):
 class ShadowRH(Shadow):
     def __init__(self):
         super().__init__()
-        self._usd_path = "./assets/Shadow/shadow_hand_right_woarm.usd"
+        # self._usd_path = "./assets/Shadow/shadow_hand_right_woarm.usd"
+        self._usd_path = "./assets/Shadow/shadow_hand_right_woarm_dummyjoint.usd"
         self.retargeting_cfg["urdf_path"] = "assets/Shadow/shadow_hand_right_woarm.urdf"
         # self.retargeting_cfg["urdf_path"] = "assets/Shadow/shadow_hand_right_glb.urdf"
         self.side = "right"

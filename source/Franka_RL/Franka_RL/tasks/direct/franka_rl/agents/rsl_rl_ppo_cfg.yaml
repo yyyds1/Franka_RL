@@ -12,8 +12,8 @@ algorithm:
   class_name: PPO
   num_learning_epochs: 5
   num_mini_batches: 4
-  learning_rate: 0.001
-  schedule: adaptive
+  learning_rate: 0.0001
+  schedule: fixed
   gamma: 0.99
   lam: 0.95
   entropy_coef: 0.005
@@ -22,7 +22,7 @@ algorithm:
   value_loss_coef: 1.0
   use_clipped_value_loss: true
   clip_param: 0.2
-  normalize_advantage_per_mini_batch: false
+  normalize_advantage_per_mini_batch: true
   symmetry_cfg: null
   rnd_cfg: null
 
