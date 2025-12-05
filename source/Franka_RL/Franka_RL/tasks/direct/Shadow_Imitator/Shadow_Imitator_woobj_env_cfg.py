@@ -26,7 +26,7 @@ class ShandImitatorwoobjEnvCfg(DirectRLEnvCfg):
     action_joint_scale = 0.1
     action_pos_scale = 5
     action_rot_scale = 0.2
-    action_moving_scale = 1.0
+    action_moving_scale = 0.6
     action_space = 28
     observation_space = 1425
     state_space = 1425

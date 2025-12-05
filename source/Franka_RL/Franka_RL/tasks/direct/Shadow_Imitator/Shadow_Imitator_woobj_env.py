@@ -210,7 +210,7 @@ class ShandImitatorwoobjEnv(DirectRLEnv):
         # self.action[:, :3] -- force applied to root
         # self.action[:, 3:6] -- torque applied to root
         # self.action[:, 6:] -- dexhand joint target
-        self.last_actions = self.actions
+        self.last_actions = self.actions.clone()
         # self.actions[:, :3] = actions[:, :3] * self.dt * self.action_pos_scale * self.action_moving_scale + self.last_actions[:, :3] * (1 - self.action_moving_scale)
         # self.actions[:, 3:6] = actions[:, 3:6] * self.dt * self.action_rot_scale * self.action_moving_scale + self.last_actions[:, 3:6] * (1 - self.action_moving_scale)
         self.actions[:, :3] = actions[:, :3] * self.action_joint_scale * self.action_moving_scale + self.last_actions[:, :3] * (1 - self.action_moving_scale)
